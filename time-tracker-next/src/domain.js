@@ -15,6 +15,13 @@ function partsFormatter(timeZone) {
   return formatters.get(timeZone);
 }
 function instant(value) { if(value===null||value===undefined||value==='')return null;const n = value instanceof Date ? value.getTime() : new Date(value).getTime(); return Number.isFinite(n) ? n : null; }
+// PostgreSQL timestamps retain microseconds. Date alone would collapse distinct
+// instants inside one millisecond and incorrectly fall back to tie_order or UUID.
+function instantNanos(value) {
+  const ms=instant(value);if(ms===null)return null;
+  const fraction=typeof value==='string'?value.match(/[Tt ]\d{2}:\d{2}:\d{2}\.(\d+)(?:[Zz]|[+-]\d{2}(?::?\d{2})?)$/)?.[1]||'':'';
+  return BigInt(ms)*1000000n+BigInt(fraction.slice(3,9).padEnd(6,'0'));
+}
 function calendarParts(value,timeZone=TIMEZONE) {
   const ms=instant(value); if(ms===null) throw new RangeError('Μη έγκυρη ημερομηνία και ώρα.');
   return Object.fromEntries(partsFormatter(timeZone).formatToParts(new Date(ms)).filter(p=>p.type!=='literal').map(p=>[p.type,Number(p.value)]));
@@ -93,8 +100,8 @@ export function effectiveEvents(events,{includePending=true}={}) {
   return (Array.isArray(events)?events:[]).filter(event=>{
     const status=event.status||'approved';return status==='approved'||(includePending&&status==='pending');
   }).map(event=>({...event,type:event.type||event.event_type,status:event.status||'approved'})).sort((a,b)=>{
-    const at=instant(a.event_at),bt=instant(b.event_at);
-    const time=(at??Infinity)-(bt??Infinity); if(Number.isFinite(time)&&time!==0)return time;
+    const at=instantNanos(a.event_at),bt=instantNanos(b.event_at);
+    if(at!==null&&bt!==null&&at!==bt)return at<bt?-1:1;
     if(at!==null&&bt===null)return -1;if(at===null&&bt!==null)return 1;
     const order=compareOrder(a.tie_order,b.tie_order);if(order!==0)return order;
     return String(a.id??a.type).localeCompare(String(b.id??b.type),'en');
@@ -110,13 +117,13 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
   timeZone=timezone||timeZone;
   const timeline=effectiveEvents(events,{includePending}),issues=[],accepted=[],counts={};
   let state='OUT',openShift=null,openBreak=null,lastEvent=null;
-  const current=instant(now),limit=Number(maxDailyShifts??max_daily_shifts)||null;
+  const current=instant(now),currentPrecise=instantNanos(now),limit=Number(maxDailyShifts??max_daily_shifts)||null;
   const issue=(event,expected_actions,message,code='invalid_transition')=>issues.push({code,event_id:event.id??null,type:event.type,event_at:event.event_at,state_before:state,expected_actions:[...expected_actions],suggested_date:openBreak?dateKey(openBreak.event_at,timeZone):openShift?dateKey(openShift.event_at,timeZone):(instant(event.event_at)!==null?dateKey(event.event_at,timeZone):null),message});
   for(const event of timeline){
     const ms=instant(event.event_at);
     if(ms===null){issue(event,[],'Η εγγραφή έχει μη έγκυρη ημερομηνία.','invalid_timestamp');continue;}
     if(!ACTIONS.includes(event.type)){issue(event,[],'Άγνωστος τύπος ενέργειας.','unknown_action');continue;}
-    if(validateFuture&&current!==null&&ms>current){issue(event,[],'Μια μελλοντική διόρθωση δεν μπορεί να καλύψει σημερινή ενέργεια.','future_event');continue;}
+    if(validateFuture&&currentPrecise!==null&&instantNanos(event.event_at)>currentPrecise){issue(event,[],'Μια μελλοντική διόρθωση δεν μπορεί να καλύψει σημερινή ενέργεια.','future_event');continue;}
     const next=NEXT[state]?.[event.type];
     if(!next){const required=REQUIRED[state]?.[event.type]||[];issue(event,required,actionMessage(state,required));continue;}
     const key=dateKey(event.event_at,timeZone);

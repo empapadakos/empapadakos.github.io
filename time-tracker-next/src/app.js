@@ -7,8 +7,8 @@ const ROLES = { admin: 'Πλήρης διαχείριση', reviewer: 'Προβ�
 const NOTES = { note: 'Σημείωση', absence: 'Απουσία', leave: 'Άδεια', sick: 'Ασθένεια', day_off: 'Ρεπό' };
 const VIEWS = [
   ['record', 'Καταγραφή', '↗', ['admin', 'operator']],
-  ['overview', 'Ζωντανή εικόνα', '◉', ['admin', 'reviewer', 'operator']],
-  ['history', 'Καταγραφές', '≡', ['admin', 'reviewer', 'operator']],
+  ['overview', 'Ζωντανή εικόνα', '◉', ['admin', 'reviewer']],
+  ['history', 'Καταγραφές', '≡', ['admin', 'reviewer']],
   ['requests', 'Διορθώσεις', '↺', ['admin', 'reviewer']],
   ['stats', 'Παρουσιολόγιο', '▦', ['admin', 'reviewer']],
   ['employees', 'Προσωπικό', '♧', ['admin', 'reviewer']],
@@ -25,6 +25,8 @@ const state = {
   adminData: null, audit: [], auditCursor: null, showArchived: false,
   search: '', department: '', busy: false, loadToken: 0, personToken: 0, connected: true,
   serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false,
+  authMode: 'admin', authResend: false, authEmail: '', authUsername: '', authRetryRestore: false, authBusy: false,
+  modalMember: null, modalDevice: null,
   adminDay: null, adminDayLoadToken: 0, nextScheduledRefresh: 0
 };
 
@@ -160,9 +162,10 @@ function modalError(error) {
     node.append(p, b);
   }
 }
-function closeModal() { if (!state.busy) modal.close(); }
+function clearPasswords(root) { root?.querySelectorAll('input[type="password"]').forEach(function(input) { input.value = ''; }); }
+function closeModal() { if (!state.busy) { clearPasswords(modal); modal.close(); state.modalDevice = null; state.modalMember = null; } }
 function openModal(title, subtitle, body, footer, kind = '') {
-  if (modal.open) modal.close();
+  if (modal.open) { clearPasswords(modal); modal.close(); }
   modal.innerHTML = '<form id="modal-form" data-kind="' + esc(kind) + '"><header class="modal-header"><div><h2 id="modal-title">' + esc(title) + '</h2>' +
     (subtitle ? '<p>' + esc(subtitle) + '</p>' : '') + '</div><button type="button" class="icon-button" data-action="close-modal" aria-label="Κλείσιμο">×</button></header>' +
     '<div class="modal-body"><div id="modal-error" class="modal-error" role="alert"></div>' + body + '</div>' +
@@ -200,15 +203,25 @@ function isoFromForm(form, prefix) {
 }
 function renderLogin() {
   state.context = null;
+  clearPasswords(app);
+  const device = state.authMode === 'device';
+  const resend = !device && state.authResend;
+  const signup = !device && !resend && state.signup;
+  const title = resend ? 'Επιβεβαίωση email' : (signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση στην εφαρμογή');
   app.innerHTML = '<div class="login-page"><section class="login-story"><div class="brand"><span class="brand-mark">Π</span><span>Παρουσίες<small>Time Tracker Next</small></span></div>' +
     '<h1>Η ομάδα σου.<br>Κάθε στιγμή,<br>σε σωστή σειρά.</h1><p>Καταγραφές παρουσίας, ξεκάθαρες διορθώσεις και μια κοινή εικόνα για την καθημερινή εργασία.</p><footer>Ώρα Ελλάδας · Οι αλλαγές επιβεβαιώνονται πριν εμφανιστούν ως αποθηκευμένες.</footer></section>' +
-    '<section class="login-form-wrap"><form id="auth-form" class="login-form"><div class="eyebrow">Καλώς ήρθες</div><h2>' + (state.signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση στην εφαρμογή') + '</h2><p>' +
-    (state.signup ? 'Χρησιμοποίησε το email για το οποίο έχεις πρόσβαση.' : 'Συνδέσου με τον λογαριασμό διαχείρισης ή του τερματικού.') + '</p>' +
+    '<section class="login-form-wrap"><form id="auth-form" class="login-form"><div class="eyebrow">Καλώς ήρθες</div><div class="auth-tabs" role="group" aria-label="Τρόπος σύνδεσης">' +
+    button('Διαχείριση', 'auth-mode', 'data-mode="admin" aria-pressed="' + !device + '"', !device ? 'active' : '') +
+    button('Υπολογιστής καταγραφής', 'auth-mode', 'data-mode="device" aria-pressed="' + device + '"', device ? 'active' : '') + '</div><h2>' + title + '</h2><p>' +
+    (device ? 'Βάλε το όνομα χρήστη και τον κωδικό που όρισε ο διαχειριστής για αυτόν τον υπολογιστή.' : (resend ? 'Στείλε νέο σύνδεσμο επιβεβαίωσης στο email σου.' : (signup ? 'Χρησιμοποίησε το email για το οποίο έχεις πρόσβαση.' : 'Συνδέσου με το προσωπικό σου email διαχείρισης.'))) + '</p>' +
     (state.authMessage ? '<div class="form-message ' + (state.authError ? 'error' : '') + '" role="status">' + esc(state.authMessage) + '</div>' : '') +
-    field('Email', 'email', '', 'email', 'required autocomplete="username"') + field('Κωδικός πρόσβασης', 'password', '', 'password', 'required minlength="8" autocomplete="' + (state.signup ? 'new-password' : 'current-password') + '"') +
-    '<button class="button primary block" type="submit" data-submit>' + (state.signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση') + '</button><div id="auth-progress" class="login-progress" aria-live="polite"></div>' +
-    '<div class="login-switch">' + (state.signup ? 'Έχεις ήδη λογαριασμό; ' : 'Πρώτη φορά εδώ; ') + '<button type="button" data-action="toggle-signup">' + (state.signup ? 'Σύνδεση' : 'Δημιουργία λογαριασμού') + '</button></div>' +
-    '<p class="login-help">Η πρόσβαση δίνεται από τον διαχειριστή. Στο κοινό tablet χρησιμοποίησε λογαριασμό τερματικού, ώστε η διαχείριση να παραμένει προσωπική.</p></form></section></div>';
+    (state.authRetryRestore ? button('Επανάληψη σύνδεσης', 'retry-restore', '', 'block') : '') +
+    (device ? field('Όνομα χρήστη υπολογιστή', 'username', state.authUsername, 'text', 'required maxlength="48" autocomplete="username" autocapitalize="none" spellcheck="false"') : field('Email', 'email', state.authEmail, 'email', 'required autocomplete="username"')) +
+    (resend ? '' : field('Κωδικός πρόσβασης', 'password', '', 'password', 'required minlength="8" autocomplete="' + (signup ? 'new-password' : 'current-password') + '"')) +
+    '<button class="button primary block" type="submit" data-submit>' + (resend ? 'Αποστολή νέου συνδέσμου' : (signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση')) + '</button><div id="auth-progress" class="login-progress" aria-live="polite"></div>' +
+    (device ? '' : '<div class="login-switch">' + (signup || resend ? 'Έχεις ήδη λογαριασμό; ' : 'Πρώτη φορά εδώ; ') + '<button type="button" data-action="toggle-signup">' + (signup || resend ? 'Σύνδεση' : 'Δημιουργία λογαριασμού') + '</button>' +
+    (resend ? '' : '<button type="button" data-action="resend-confirmation">Νέο email επιβεβαίωσης</button>') + '</div>') +
+    '<p class="login-help">' + (device ? 'Οι εργαζόμενοι επιλέγουν το όνομά τους και πατούν τις καταγραφές, χωρίς δικό τους email. Η σύνδεση διατηρείται σε αυτόν τον browser, χωρίς αποσύνδεση λόγω αδράνειας. Μπορεί να χρειαστεί νέα σύνδεση μετά από αποσύνδεση, αλλαγή πρόσβασης ή διαγραφή δεδομένων του browser.' : 'Η πρόσβαση δίνεται από τον διαχειριστή. Στο κοινό tablet χρησιμοποίησε λογαριασμό τερματικού, ώστε η διαχείριση να παραμένει προσωπική.') + '</p></form></section></div>';
 }
 async function enterApp() {
   const context = await api.context(); state.context = context; setServerTime(context.server_now); state.lastActivity = Date.now();
@@ -224,7 +237,7 @@ function renderShell() {
       (v[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
   }).join('');
   app.innerHTML = '<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">Π</span><span class="brand-text">Παρουσίες<small>Time Tracker Next</small></span></div><nav aria-label="Κύρια πλοήγηση">' + navigation + '</nav>' +
-    '<div class="sidebar-footer"><div class="account-name">' + esc(ctx.display_name || ctx.email) + '</div><div class="account-role">' + esc(ROLES[ctx.role] || ctx.role) + '</div><button type="button" data-action="logout">Αποσύνδεση ↗</button></div></aside>' +
+    '<div class="sidebar-footer"><div class="account-name">' + esc(ctx.display_name || ctx.username || ctx.email) + '</div><div class="account-role">' + esc(ROLES[ctx.role] || ctx.role) + (ctx.is_owner ? ' · Ιδιοκτήτης' : '') + '</div><button type="button" data-action="logout">Αποσύνδεση ↗</button></div></aside>' +
     '<div class="main-wrap"><header class="topbar"><button class="icon-button mobile-menu-toggle" type="button" data-action="toggle-menu" aria-label="Μενού" aria-expanded="false">☰</button><span class="header-title-mobile">Παρουσίες</span><div class="breadcrumb">Χώρος εργασίας <span aria-hidden="true">/</span> <strong id="current-view-name">' + esc(VIEWS.find(function(v) { return v[0] === state.view; })?.[1] || '') + '</strong></div>' +
     '<div class="header-actions"><span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
   renderUncertain(); tick();
@@ -335,7 +348,7 @@ function renderSelectedPerson() {
     '<button class="attendance-button break-start" type="button" data-action="record-action" data-type="break_start" data-mutate><span>☕</span>Έναρξη διαλείμματος</button>' +
     '<button class="attendance-button break-end" type="button" data-action="record-action" data-type="break_end" data-mutate><span>↶</span>Επιστροφή</button>' +
     '<button class="attendance-button clock-out" type="button" data-action="record-action" data-type="clock_out" data-mutate><span>↗</span>Έξοδος</button></div>' +
-    '<div class="actions">' + button('Αίτημα διόρθωσης', 'open-correction', 'data-id="' + esc(e.id) + '"', 'text') + button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'text') + '</div>' +
+    '<div class="actions">' + button('Αίτημα διόρθωσης', 'open-correction', 'data-id="' + esc(e.id) + '"', 'text') + (state.context.role === 'operator' ? '' : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'text')) + '</div>' +
     '<h3 class="muted">Τελευταίες κινήσεις</h3><ul class="recent-list">' + recent.map(function(ev) { return '<li><span>' + esc(ACTIONS[ev.type]) + (ev.status === 'pending' ? ' <small>· σε αναμονή</small>' : '') + '</span><span class="mono">' + esc(displayTime(ev.event_at)) + '<small> · ' + esc(displayDate(ev.event_at)) + '</small></span></li>'; }).join('') + '</ul>' +
     '<p class="field-help">Οι διορθώσεις προσμετρώνται προσωρινά. Μπορείς να συνεχίσεις όταν έχουν καλυφθεί όλες οι ελλείψεις.</p>';
 }
@@ -632,6 +645,8 @@ function renderEmployees() {
 function renderSettings() {
   const settings = state.adminData?.settings || state.context.settings;
   const members = state.adminData?.members || [];
+  const emailMembers = members.filter(function(m) { return m.login_kind !== 'device'; });
+  const devices = members.filter(function(m) { return m.login_kind === 'device'; });
   return heading('Ρυθμίσεις', 'Κοινοί κανόνες παρουσίας και πρόσβαση στην εφαρμογή.') +
     '<div class="settings-columns"><section class="card"><div class="card-heading"><h2>Χρόνος εργασίας</h2></div><form id="settings-form"><div class="form-grid">' +
     field('Ημερήσιο όριο διαλείμματος · λεπτά', 'break_limit_minutes', settings.break_limit_minutes, 'number', 'min="0" max="1440" required') +
@@ -639,11 +654,17 @@ function renderSettings() {
     selectField('Προεπιλογή βαρδιών ανά ημέρα', 'default_max_daily_shifts', option('1', '1 βάρδια', settings.default_max_daily_shifts) + option('2', '2 βάρδιες', settings.default_max_daily_shifts)) +
     field('Αδράνεια διαχείρισης · λεπτά', 'idle_timeout_minutes', settings.idle_timeout_minutes || 10, 'number', 'min="1" max="240" required') +
     '<div class="full">' + banner('Τα διαλείμματα περιλαμβάνονται στις ώρες παρουσίας. Το όριο διαλείμματος αφορά το ημερήσιο σύνολο. Οι ώρες εμφανίζονται πάντα σε ώρα Ελλάδας.') + '</div></div><button class="button primary" type="submit" data-submit>Αποθήκευση ρυθμίσεων</button><div class="form-error" role="alert"></div></form></section>' +
-    '<section class="card"><div class="card-heading"><h2>Λογαριασμοί πρόσβασης</h2>' + button('Προσθήκη', 'edit-member', '', 'small primary') + '</div><p class="muted">Χρησιμοποίησε ξεχωριστό λογαριασμό τερματικού στο κοινό tablet.</p>' +
-    (members.length ? '<div class="table-wrap"><table><thead><tr><th>Λογαριασμός</th><th>Ρόλος</th><th></th></tr></thead><tbody>' + members.map(function(m) {
-      return '<tr><td class="wrap"><strong>' + esc(m.display_name || m.email) + '</strong><small class="shift-line">' + esc(m.email) + '</small>' + (m.disabled ? '<span class="badge">Ανενεργός</span>' : '') + '</td><td>' + esc(ROLES[m.role] || m.role) + '</td><td>' + button('Αλλαγή', 'edit-member', 'data-email="' + esc(m.email) + '"', 'small') + '</td></tr>';
+    '<div class="settings-account-stack"><section class="card"><div class="card-heading"><h2>Λογαριασμοί με email</h2>' + button('Προσθήκη', 'edit-member', '', 'small primary') + '</div><p class="muted">Προσωπικοί λογαριασμοί διαχείρισης και προβολής αναφορών.</p>' +
+    (emailMembers.length ? '<div class="table-wrap"><table><thead><tr><th>Λογαριασμός</th><th>Ρόλος</th><th></th></tr></thead><tbody>' + emailMembers.map(function(m) {
+      const protectedOwner = m.is_owner && !state.context.is_owner;
+      return '<tr><td class="wrap"><strong>' + esc(m.display_name || m.email) + '</strong><small class="shift-line">' + esc(m.email) + '</small>' + (m.is_owner ? '<span class="badge blue owner-badge">Ιδιοκτήτης</span>' : '') + (m.disabled ? '<span class="badge">Ανενεργός</span>' : '') + '</td><td>' + esc(ROLES[m.role] || m.role) + '</td><td>' + button('Αλλαγή', 'edit-member', 'data-email="' + esc(m.email) + '"' + (protectedOwner ? ' disabled title="Ο λογαριασμός ιδιοκτήτη δεν αλλάζει από άλλον διαχειριστή."' : ''), 'small') + '</td></tr>';
     }).join('') + '</tbody></table></div>' : '<p class="muted">Δεν υπάρχουν άλλοι λογαριασμοί.</p>') +
-    '<p class="field-help">Η προσθήκη επιτρέπει την πρόσβαση. Ο χρήστης δημιουργεί τον δικό του λογαριασμό με το ίδιο email και επιβεβαιώνει τη διεύθυνσή του.</p></section></div>';
+    '<p class="field-help">Η προσθήκη επιτρέπει την πρόσβαση. Ο χρήστης δημιουργεί τον δικό του λογαριασμό με το ίδιο email και επιβεβαιώνει τη διεύθυνσή του. Κάθε διαχειριστής έχει πλήρη διαχείριση, ενώ ο λογαριασμός ιδιοκτήτη προστατεύεται.</p></section>' +
+    '<section class="card"><div class="card-heading"><h2>Υπολογιστές καταγραφής</h2>' + button('Νέος υπολογιστής', 'edit-device', '', 'small primary') + '</div><p class="muted">Ένας λογαριασμός για κάθε κοινό υπολογιστή ή tablet. Οι εργαζόμενοι δεν χρειάζονται email.</p>' +
+    (devices.length ? '<div class="table-wrap"><table><thead><tr><th>Υπολογιστής</th><th>Πρόσβαση</th><th></th></tr></thead><tbody>' + devices.map(function(m) {
+      return '<tr><td class="wrap"><strong>' + esc(m.display_name || m.username) + '</strong><small class="shift-line">' + esc(m.username) + '</small></td><td><span class="badge ' + (m.disabled ? '' : 'green') + '">' + (m.disabled ? 'Ανενεργός' : 'Ενεργός') + '</span></td><td>' + button('Αλλαγή', 'edit-device', 'data-id="' + esc(m.id) + '"', 'small') + '</td></tr>';
+    }).join('') + '</tbody></table></div>' : '<p class="muted">Πρόσθεσε υπολογιστή για να συνδέεσαι με όνομα χρήστη και κωδικό.</p>') +
+    '<p class="field-help">Πρόσβαση μόνο στις καταγραφές και στα αιτήματα διόρθωσης. Η συνεδρία δεν λήγει λόγω αδράνειας. Μπορείς να αλλάξεις τον κωδικό ή να απενεργοποιήσεις την πρόσβαση εδώ.</p></section></div></div>';
 }
 function renderAudit() {
   const labels = { record: 'Καταγραφή', correction: 'Αίτημα διόρθωσης', review: 'Έλεγχος διόρθωσης', event_edit: 'Αλλαγή ώρας', event_void: 'Ακύρωση κινήσεων', employee_save: 'Αλλαγή προσωπικού', employee_archive: 'Αρχειοθέτηση / επαναφορά', settings_save: 'Αλλαγή ρυθμίσεων', note_save: 'Σημείωση ημέρας', note_delete: 'Αφαίρεση σημείωσης', member_save: 'Αλλαγή πρόσβασης' };
@@ -785,13 +806,30 @@ function openNote(day) {
 function openMember(email) {
   if (!isAdmin()) return;
   const member = state.adminData?.members?.find(function(m) { return m.email === email; }) || {};
+  if (member.login_kind === 'device') { openDevice(member.id); return; }
+  if (member.is_owner && !state.context.is_owner) { toast('Ο λογαριασμός ιδιοκτήτη δεν αλλάζει από άλλον διαχειριστή.', 'error'); return; }
+  const owner = Boolean(member.is_owner);
+  state.modalMember = member.email ? { email: member.email, is_owner: owner } : null;
   openModal(email ? 'Αλλαγή πρόσβασης' : 'Νέος λογαριασμός πρόσβασης', 'Κάθε λογαριασμός έχει συγκεκριμένα δικαιώματα.',
     '<div class="form-grid">' + field('Email', 'email', member.email || '', 'email', 'required autocomplete="off"' + (email ? ' readonly' : '')) +
     field('Όνομα εμφάνισης', 'display_name', member.display_name || '', 'text', 'maxlength="120"') +
-    selectField('Ρόλος', 'role', Object.entries(ROLES).map(function(p) { return option(p[0], p[1], member.role || 'operator'); }).join('')) +
-    '<label class="check-label"><input name="disabled" type="checkbox"' + (member.disabled ? ' checked' : '') + '>Απενεργοποίηση πρόσβασης</label></div>' +
-    '<p class="field-help">Η πρόσβαση τερματικού επιτρέπει επιλογή εργαζομένου, καταγραφές και διορθώσεις. Δεν επιτρέπει αλλαγές προσωπικού, εγκρίσεις ή αναφορές όλης της ομάδας.</p>',
+    selectField('Ρόλος', 'role', Object.entries(ROLES).filter(function(p) { return p[0] !== 'operator' || member.role === 'operator'; }).map(function(p) { return option(p[0], p[1], member.role || 'admin'); }).join(''), owner ? 'disabled' : '') +
+    '<label class="check-label"><input name="disabled" type="checkbox"' + (member.disabled ? ' checked' : '') + (owner ? ' disabled' : '') + '>Απενεργοποίηση πρόσβασης</label></div>' +
+    '<p class="field-help">' + (owner ? 'Στον λογαριασμό ιδιοκτήτη αλλάζει μόνο το όνομα εμφάνισης.' : 'Ο διαχειριστής έχει πλήρη διαχείριση. Για κοινό υπολογιστή, δημιούργησε ξεχωριστό λογαριασμό στην ενότητα «Υπολογιστές καταγραφής».') + '</p>',
     submitButton('Αποθήκευση πρόσβασης'), 'member');
+}
+function openDevice(id) {
+  if (!isAdmin()) return;
+  const member = id ? state.adminData?.members?.find(function(m) { return String(m.id) === String(id) && m.login_kind === 'device'; }) : null;
+  if (id && !member) { toast('Ο λογαριασμός υπολογιστή δεν βρέθηκε. Ανανέωσε τους λογαριασμούς.', 'error'); return; }
+  state.modalDevice = member ? { id: member.id, username: member.username } : null;
+  openModal(member ? 'Αλλαγή υπολογιστή καταγραφής' : 'Νέος υπολογιστής καταγραφής', 'Ο λογαριασμός επιτρέπει μόνο καταγραφές και αιτήματα διόρθωσης.',
+    '<div class="form-grid">' + field('Όνομα χρήστη', 'username', member?.username || '', 'text', 'required minlength="3" maxlength="48" pattern="[a-zA-Z0-9][a-zA-Z0-9._\\-]{2,47}" autocomplete="off" autocapitalize="none" spellcheck="false"' + (member ? ' readonly' : '')) +
+    field('Όνομα υπολογιστή', 'display_name', member?.display_name || '', 'text', 'required maxlength="120" autocomplete="off"') +
+    '<div class="full">' + field(member ? 'Νέος κωδικός · προαιρετικά' : 'Κωδικός πρόσβασης', 'password', '', 'password', (member ? '' : 'required ') + 'minlength="12" maxlength="128" autocomplete="new-password"') + '</div>' +
+    (member ? '<label class="check-label full"><input name="disabled" type="checkbox"' + (member.disabled ? ' checked' : '') + '>Απενεργοποίηση πρόσβασης υπολογιστή</label>' : '') + '</div>' +
+    '<p class="field-help">Το όνομα χρήστη έχει 3–48 λατινικούς χαρακτήρες, αριθμούς, τελεία, παύλα ή κάτω παύλα και ξεκινά με γράμμα ή αριθμό. Ο κωδικός έχει τουλάχιστον 12 χαρακτήρες.' + (member ? ' Άφησέ τον κενό για να διατηρηθεί ο υπάρχων. Το όνομα χρήστη δεν αλλάζει.' : ' Αποθήκευσέ τον για τη σύνδεση στον συγκεκριμένο υπολογιστή.') + '</p>',
+    submitButton(member ? 'Αποθήκευση υπολογιστή' : 'Δημιουργία υπολογιστή'), 'device-account');
 }
 function updateBulkSelection() {
   const checked = document.querySelectorAll('.event-check:checked').length;
@@ -816,14 +854,22 @@ function exportStats() {
 }
 async function logout(message = '') {
   if (state.busy) return;
+  state.authMode = state.context?.login_kind === 'device' ? 'device' : 'admin'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
   closeModal(); state.loadToken++; state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null;
   state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
   try { await api.signOut(); } catch {}
   state.authMessage = message; state.authError = false; renderLogin();
 }
 async function handleAction(action, node) {
-  if (state.busy) return;
-  if (action === 'toggle-signup') { state.signup = !state.signup; state.authMessage = ''; renderLogin(); return; }
+  if (state.busy || state.authBusy) return;
+  if (action === 'auth-mode' || action === 'toggle-signup' || action === 'resend-confirmation') {
+    rememberAuthIdentity(document.getElementById('auth-form'));
+    if (action === 'auth-mode') { state.authMode = node.dataset.mode === 'device' ? 'device' : 'admin'; state.signup = false; state.authResend = false; }
+    else if (action === 'resend-confirmation') { state.authMode = 'admin'; state.signup = false; state.authResend = true; }
+    else { state.authMode = 'admin'; state.signup = state.authResend ? false : !state.signup; state.authResend = false; }
+    state.authMessage = ''; state.authError = false; state.authRetryRestore = false; renderLogin(); return;
+  }
+  if (action === 'retry-restore') { state.authMessage = 'Επανασύνδεση…'; state.authError = false; renderLogin(); await initialize(); return; }
   if (action === 'logout') { await logout(); return; }
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'toggle-menu') { const side = document.getElementById('sidebar'); side?.classList.toggle('open'); node.setAttribute('aria-expanded', String(side?.classList.contains('open'))); return; }
@@ -888,6 +934,7 @@ async function handleAction(action, node) {
   if (action === 'void-selected') { openVoid(Array.from(document.querySelectorAll('.event-check:checked')).map(function(el) { return el.value; })); return; }
   if (action === 'edit-note') { openNote(node.dataset.date); return; }
   if (action === 'edit-member') { openMember(node.dataset.email); return; }
+  if (action === 'edit-device') { openDevice(node.dataset.id); return; }
   if (action === 'export-stats') { exportStats(); return; }
   if (action === 'retry-command') {
     if (!state.pendingCommand || state.busy) return;
@@ -900,21 +947,61 @@ async function handleAction(action, node) {
     const data = await api.read('audit', { cursor: state.auditCursor, limit: 100 }); state.audit.push(...(data.rows || [])); state.auditCursor = data.next_cursor; renderCurrentView();
   }
 }
+function rememberAuthIdentity(form) {
+  if (form?.elements?.email) state.authEmail = form.elements.email.value.trim();
+  if (form?.elements?.username) state.authUsername = form.elements.username.value.trim().toLowerCase();
+}
 async function handleAuth(form) {
+  if (state.authBusy) return;
   const submit = form.querySelector('[type=submit]'); const progress = document.getElementById('auth-progress');
-  submit.disabled = true; progress.textContent = state.signup ? 'Δημιουργία λογαριασμού…' : 'Σύνδεση…';
+  state.authBusy = true; submit.disabled = true;
+  const device = state.authMode === 'device'; const resend = !device && state.authResend;
+  progress.textContent = resend ? 'Αποστολή email…' : (state.signup ? 'Δημιουργία λογαριασμού…' : 'Σύνδεση…');
+  rememberAuthIdentity(form);
   try {
-    const payload = { email: form.elements.email.value.trim(), password: form.elements.password.value };
-    if (state.signup) {
+    if (resend) {
+      await api.resendConfirmation(state.authEmail);
+      state.authResend = false; state.signup = false; state.authError = false; state.authRetryRestore = false;
+      state.authMessage = 'Αν το email περιμένει επιβεβαίωση, θα λάβεις νέο σύνδεσμο. Έλεγξε και την ανεπιθύμητη αλληλογραφία. Άνοιξε τον πιο πρόσφατο σύνδεσμο.';
+      renderLogin(); return;
+    }
+    const payload = device ? { username: state.authUsername, password: form.elements.password.value } : { email: state.authEmail, password: form.elements.password.value };
+    if (!device && state.signup) {
       const result = await api.signUp(payload);
       if (result.needs_confirmation) {
         state.signup = false; state.authMessage = 'Έλεγξε το email σου και επιβεβαίωσε τη διεύθυνσή σου. Έπειτα επέστρεψε εδώ για σύνδεση.'; state.authError = false; renderLogin(); return;
       }
     } else await api.signIn(payload);
+    state.authMessage = ''; state.authError = false; state.authRetryRestore = false;
     await enterApp();
   } catch (error) {
     state.authMessage = error.message || 'Η σύνδεση δεν ολοκληρώθηκε.'; state.authError = true; renderLogin();
-  } finally { if (submit.isConnected) submit.disabled = false; }
+  } finally { if (form.elements.password) form.elements.password.value = ''; state.authBusy = false; if (submit.isConnected) submit.disabled = false; }
+}
+async function saveDeviceAccount(form) {
+  if (!isAdmin()) throw new Error('Απαιτείται διαχειριστής.');
+  if (state.busy) return;
+  const f = form.elements; const member = state.modalDevice;
+  const username = member?.username || f.username.value.trim().toLowerCase();
+  try {
+    if (!/^[a-z0-9][a-z0-9._-]{2,47}$/.test(username)) throw new Error('Το όνομα χρήστη πρέπει να έχει 3–48 λατινικούς χαρακτήρες, αριθμούς, τελεία, παύλα ή κάτω παύλα.');
+    if ((!member || f.password.value) && (f.password.value.length < 12 || f.password.value.length > 128)) throw new Error('Ο κωδικός πρέπει να έχει από 12 έως 128 χαρακτήρες.');
+    if (!f.display_name.value.trim()) throw new Error('Συμπλήρωσε όνομα υπολογιστή.');
+    const payload = { action: member ? 'update_device' : 'create_device', username, display_name: f.display_name.value.trim() };
+    if (member) { payload.id = member.id; payload.disabled = Boolean(f.disabled?.checked); }
+    if (f.password.value) payload.password = f.password.value;
+    setBusy(true);
+    try { await api.manageAccount(payload); }
+    finally { delete payload.password; }
+    setBusy(false); closeModal(); toast(member ? 'Ο υπολογιστής ενημερώθηκε.' : 'Ο λογαριασμός υπολογιστή δημιουργήθηκε.', 'success');
+    await refreshApp();
+  } catch (error) {
+    setBusy(false);
+    if (!error.uncertain) throw error;
+    closeModal();
+    try { state.adminData = await api.read('admin', {}); setServerTime(state.adminData.server_now); if (state.view === 'settings') renderCurrentView(); } catch { setConnection(false); }
+    toast('Δεν επιβεβαιώθηκε η αλλαγή. Ανανέωσε τους λογαριασμούς πριν προσπαθήσεις ξανά.', 'error');
+  } finally { f.password.value = ''; setBusy(false); }
 }
 async function handleModalForm(form, decision) {
   const kind = form.dataset.kind;
@@ -978,9 +1065,15 @@ async function handleModalForm(form, decision) {
       closeModal(); toast(decision === 'delete' ? 'Η σημείωση αφαιρέθηκε.' : 'Η σημείωση αποθηκεύτηκε.', 'success'); await refreshApp(); return;
     }
     if (kind === 'member') {
-      await command('member_save', { email: f.email.value.trim(), display_name: f.display_name.value.trim(), role: f.role.value, disabled: f.disabled.checked });
+      if (!isAdmin()) throw new Error('Απαιτείται διαχειριστής.');
+      const email = state.modalMember?.email || f.email.value.trim();
+      const member = state.adminData?.members?.find(function(m) { return String(m.email || '').toLowerCase() === email.toLowerCase(); });
+      if (member?.is_owner && !state.context.is_owner) throw new Error('Ο λογαριασμός ιδιοκτήτη δεν αλλάζει από άλλον διαχειριστή.');
+      if (member?.login_kind === 'device') throw new Error('Άλλαξε αυτόν τον λογαριασμό στην ενότητα υπολογιστών καταγραφής.');
+      await command('member_save', { email, display_name: f.display_name.value.trim(), role: member?.is_owner ? 'admin' : f.role.value, disabled: member?.is_owner ? false : f.disabled.checked });
       closeModal(); toast('Η πρόσβαση ενημερώθηκε.', 'success'); await refreshApp();
     }
+    if (kind === 'device-account') { await saveDeviceAccount(form); return; }
   } catch (error) { modalError(error); }
 }
 async function handleSettings(form) {
@@ -1059,7 +1152,10 @@ document.addEventListener('input', function(event) {
 ['pointerdown', 'keydown', 'touchstart'].forEach(function(type) {
   document.addEventListener(type, function() { state.lastActivity = Date.now(); }, { passive: true });
 });
-modal.addEventListener('cancel', function(event) { if (state.busy) event.preventDefault(); });
+modal.addEventListener('cancel', function(event) {
+  if (state.busy) event.preventDefault();
+  else { clearPasswords(modal); state.modalDevice = null; state.modalMember = null; }
+});
 window.addEventListener('offline', function() { setConnection(false); });
 window.addEventListener('online', function() { if (state.context && !state.busy) refreshApp(); });
 document.addEventListener('visibilitychange', function() { if (!document.hidden && state.context && !state.busy && !modal.open) refreshApp(); });
@@ -1070,12 +1166,23 @@ setInterval(function() {
 }, 30000);
 if (typeof api.subscribe === 'function') api.subscribe(function(session) {
   if (!session && state.context) {
-    state.context = null; state.loadToken++; state.adminDayLoadToken++; state.adminDay = null; state.nextScheduledRefresh = 0; modal.close(); state.authMessage = 'Συνδέσου ξανά για να συνεχίσεις.'; state.authError = false; renderLogin();
+    const wasDevice = state.context.login_kind === 'device';
+    state.context = null; state.loadToken++; state.adminDayLoadToken++; state.adminDay = null; state.nextScheduledRefresh = 0;
+    clearPasswords(modal); state.modalDevice = null; state.modalMember = null; modal.close();
+    state.authMode = wasDevice ? 'device' : 'admin'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
+    state.authMessage = 'Συνδέσου ξανά για να συνεχίσεις.'; state.authError = false; renderLogin();
   }
 });
 async function initialize() {
+  if (state.authBusy) return;
+  state.authBusy = true;
   try {
-    if (await api.restore()) await enterApp(); else renderLogin();
-  } catch (error) { state.authMessage = error.message || 'Η εφαρμογή δεν μπόρεσε να συνδεθεί.'; state.authError = true; renderLogin(); }
+    if (await api.restore()) { state.authRetryRestore = false; await enterApp(); } else { state.authRetryRestore = false; renderLogin(); }
+  } catch (error) {
+    state.authMessage = error.message || 'Η εφαρμογή δεν μπόρεσε να συνδεθεί.'; state.authError = true;
+    state.authRetryRestore = ['NETWORK', 'TIMEOUT', 'BAD_RESPONSE'].includes(error.code);
+    if (error.code === 'otp_expired') { state.authMode = 'admin'; state.signup = false; state.authResend = true; }
+    renderLogin();
+  } finally { state.authBusy = false; }
 }
 initialize();

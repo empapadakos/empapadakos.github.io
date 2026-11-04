@@ -1,8 +1,8 @@
 import { api } from './api.js';
-import { replay, planNext, monthlyStats, dateKey, formatTime, formatDate, formatMinutes, localToIso, possibleInstants } from './domain.js';
+import { replay, effectiveEvents, planNext, monthlyStats, dateKey, formatTime, formatDate, formatMinutes, localToIso, possibleInstants } from './domain.js';
 
 const ACTIONS = { clock_in: 'Είσοδος', break_start: 'Έναρξη διαλείμματος', break_end: 'Επιστροφή', clock_out: 'Έξοδος' };
-const STATUS = { approved: 'Εγκεκριμένη', pending: 'Σε αναμονή', rejected: 'Απορρίφθηκε', void: 'Ακυρωμένη' };
+const STATUS = { approved: 'Εγκεκριμένη', pending: 'Σε αναμονή', draft: 'Πρόχειρη', rejected: 'Απορρίφθηκε', void: 'Ακυρωμένη' };
 const ROLES = { admin: 'Πλήρης διαχείριση', reviewer: 'Προβολή αναφορών', operator: 'Τερματικό καταγραφής' };
 const NOTES = { note: 'Σημείωση', absence: 'Απουσία', leave: 'Άδεια', sick: 'Ασθένεια', day_off: 'Ρεπό' };
 const VIEWS = [
@@ -24,7 +24,8 @@ const state = {
   statsId: '', month: '', statsMode: 'effective', monthData: null, stats: null,
   adminData: null, audit: [], auditCursor: null, showArchived: false,
   search: '', department: '', busy: false, loadToken: 0, personToken: 0, connected: true,
-  serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false
+  serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false,
+  adminDay: null, adminDayLoadToken: 0, nextScheduledRefresh: 0
 };
 
 function esc(value) {
@@ -64,6 +65,8 @@ function badgeForState(value) {
   return '<span class="badge ' + pair[1] + '"><span class="status-dot"></span>' + pair[0] + '</span>';
 }
 function statusBadge(status) { return '<span class="badge ' + ({ pending: 'amber', approved: 'green', rejected: 'red' }[status] || '') + '">' + esc(STATUS[status] || status) + '</span>'; }
+function isScheduledEvent(event) { return event?.source === 'admin' && event.status === 'approved' && Date.parse(event.event_at) > now().getTime(); }
+function eventStatusBadge(event) { return isScheduledEvent(event) ? '<span class="badge planned">Ορισμένη ώρα</span>' : statusBadge(event.status); }
 function pendingBadge(count) { return count ? '<span class="badge amber">' + esc(count) + ' σε αναμονή</span>' : ''; }
 function avatar(e) { return '<span class="avatar" data-color="' + esc(/^#[0-9a-f]{6}$/i.test(e?.color || '') ? e.color : '') + '">' + esc(initials(e?.name)) + '</span>'; }
 function colorAvatars() {
@@ -147,6 +150,10 @@ function modalError(error) {
   const node = document.getElementById('modal-error');
   if (!node) { toast(issueMessages(error), 'error'); return; }
   node.textContent = issueMessages(error);
+  if (isAdmin() && error.details?.code === 'STALE_REVISION' && state.adminDay) {
+    const p = document.createElement('p'); p.textContent = 'Οι ώρες άλλαξαν σε άλλη συσκευή. Φόρτωσε τη νεότερη εικόνα πριν αποθηκεύσεις ξανά. Οι μη αποθηκευμένες αλλαγές αυτής της φόρμας θα χαθούν.';
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'admin-day-reload'; b.textContent = 'Φόρτωση νεότερων ωρών'; node.append(p, b);
+  }
   if (isAdmin() && error.details?.code === 'DEPENDENT_EVENTS') {
     const p = document.createElement('p'); p.textContent = 'Μπορείς να επιλέξεις τις σχετικές κινήσεις στις Καταγραφές και να τις ακυρώσεις μαζί.';
     const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'related-history'; b.textContent = 'Άνοιγμα σχετικών καταγραφών';
@@ -317,7 +324,7 @@ function renderSelectedPerson() {
   if (!state.employeeData || String(state.employeeData.employee?.id) !== String(e.id)) return loading();
   const data = state.employeeData; const s = stateOf(data);
   const issues = s.issues || [];
-  const recent = (data.events || []).filter(function(ev) { return !['void', 'rejected'].includes(ev.status); }).slice(-5).reverse();
+  const recent = (data.events || []).filter(function(ev) { return !['void', 'rejected', 'draft'].includes(ev.status) && Date.parse(ev.event_at) <= now().getTime(); }).slice(-5).reverse();
   const stateDescription = s.open_break_at ? 'Διάλειμμα από ' + displayTime(s.open_break_at) : (s.open_shift_at ? 'Είσοδος ' + displayDate(s.open_shift_at) + ' στις ' + displayTime(s.open_shift_at) : 'Δεν υπάρχει ανοιχτή βάρδια.');
   return '<div class="selected-person">' + avatar(e) + '<div><h2>' + esc(e.name) + '</h2><span class="muted">' + esc(e.department || 'Ομάδα') + '</span></div></div>' +
     '<div class="state-panel">' + badgeForState(s) + ' ' + pendingBadge(s.pending_count) + '<p>' + esc(stateDescription) + '</p>' +
@@ -369,7 +376,7 @@ function renderHistory() {
     (rows.length ? '<div class="table-wrap"><table><thead><tr>' + (isAdmin() ? '<th><input type="checkbox" id="select-all-events" aria-label="Επιλογή όλων"></th>' : '') + '<th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (isAdmin() ? '<th></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
       const editable = ['approved', 'pending'].includes(ev.status);
       return '<tr>' + (isAdmin() ? '<td>' + (editable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" aria-label="Επιλογή κίνησης">' : '') + '</td>' : '') +
-        '<td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + statusBadge(ev.status) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Τροποποίηση διαχειριστή</small>' : '') + '</td>' +
+        '<td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '') + '</td>' +
         (isAdmin() ? '<td>' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + '</td>' : '') + '</tr>';
     }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρώσεις διατηρούνται στο ιστορικό.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
 }
@@ -383,23 +390,197 @@ function renderRequests() {
         (ev.status === 'pending' && isAdmin() ? button('Έλεγχος', 'review-event', 'data-id="' + esc(ev.id) + '"', 'small primary') : button('Ιστορικό', 'person-history', 'data-id="' + esc(ev.employee_id) + '"', 'small')) + '</td></tr>';
     }).join('') + '</tbody></table></div>' : empty('Η λίστα είναι καθαρή', 'Δεν υπάρχουν αιτήματα με τα επιλεγμένα φίλτρα.')) + '</section>';
 }
-function timeCell(iso, id, employeeId) {
+function timeCell(iso, id, employeeId, context = {}) {
   const text = esc(displayTime(iso));
-  return id && isAdmin() ? '<button type="button" class="time-button mono" data-action="edit-event" data-id="' + esc(id) + '" data-employee="' + esc(employeeId) + '">' + text + '</button>' : '<span class="mono">' + text + '</span>';
+  if (!isAdmin()) return '<span class="mono">' + text + '</span>';
+  const day = iso ? dateKey(iso) : context.date;
+  return '<button type="button" class="time-button mono' + (!iso ? ' empty-time' : '') + '" data-action="admin-day" data-id="' + esc(id || '') + '" data-employee="' + esc(employeeId) + '" data-date="' + esc(day || today()) + '" data-type="' + esc(context.type || '') + '" data-shift="' + esc(context.shift_ref || '') + '" data-break="' + esc(context.break_ref || '') + '"' + (iso ? ' data-time="' + esc(iso) + '"' : '') + '>' + (iso ? text : '+ ' + esc(ACTIONS[context.type] || 'Ώρα')) + '</button>';
+}
+
+function newAdminSlot(type, id = crypto.randomUUID(), event = null, date = state.adminDay?.date || today(), options = {}) {
+  const values = event?.event_at ? dateTimeValues(event.event_at) : { date, time: '' };
+  let occurrence = '';
+  if (event?.event_at) { try { const candidates = possibleInstants(values.date, values.time); if (candidates.length > 1) occurrence = Date.parse(event.event_at) < Date.parse(candidates[1]) ? 'earlier' : 'later'; } catch {} }
+  return { id, type, key: crypto.randomUUID(), original: event, date: values.date, time: values.time,
+    occurrence, initial_occurrence: occurrence, closes_open_break: type === 'clock_out' ? (event ? Boolean(event.closes_open_break) : true) : false,
+    readonly: Boolean(event && options.anchor && dateKey(event.event_at) !== date), remove: false };
+}
+function newAdminBreak(group, startId = crypto.randomUUID()) {
+  return { id: startId, start: newAdminSlot('break_start', startId, null, group.date), end: newAdminSlot('break_end', crypto.randomUUID(), null, group.date) };
+}
+function newAdminShift(date, id = crypto.randomUUID(), anchor = null) {
+  const group = { id, date, entry: newAdminSlot('clock_in', id, anchor, date, { anchor: true }), exit: newAdminSlot('clock_out', crypto.randomUUID(), null, date), breaks: [] };
+  return group;
+}
+function adminSlots(model = state.adminDay) {
+  return (model?.groups || []).flatMap(function(group) { return [group.entry, ...group.breaks.flatMap(function(br) { return [br.start, br.end]; }), group.exit]; });
+}
+function buildAdminDayModel(data, preferred = {}) {
+  const raw = (data.entries || []).filter(function(e) { return !['void', 'rejected'].includes(e.status); });
+  const unique = new Map();
+  [...(state.monthData?.events || []), ...(data.relevant_anchors || []), ...raw].forEach(function(e) { if (e?.id) unique.set(String(e.id), e); });
+  const all = [...unique.values()]; const references = new Map();
+  let shift = null, activeBreak = null;
+  effectiveEvents(all).forEach(function(e) {
+    if (e.type === 'clock_in') { shift = e.shift_ref || e.id; activeBreak = null; }
+    const sr = e.shift_ref || shift;
+    if (e.type === 'break_start') activeBreak = e.break_ref || e.id;
+    references.set(String(e.id), { shift_ref: sr, break_ref: e.break_ref || activeBreak });
+    if (e.type === 'break_end') activeBreak = null;
+    if (e.type === 'clock_out') { shift = null; activeBreak = null; }
+  });
+  const model = { employeeId: data.employee?.id || state.statsId, date: data.date, revision: data.revision, groups: [], preferred, source: data };
+  function groupFor(id) {
+    id = id || crypto.randomUUID();
+    let group = model.groups.find(function(g) { return String(g.id) === String(id); });
+    if (!group) { const anchor = unique.get(String(id)); group = newAdminShift(model.date, id, anchor?.type === 'clock_in' ? anchor : null); model.groups.push(group); }
+    return group;
+  }
+  function breakFor(group, id) {
+    id = id || crypto.randomUUID(); let br = group.breaks.find(function(b) { return String(b.id) === String(id); });
+    if (!br) { br = newAdminBreak(group, id); const anchor = unique.get(String(id)); if (anchor?.type === 'break_start') br.start = newAdminSlot('break_start', id, anchor, model.date, { anchor: true }); group.breaks.push(br); }
+    return br;
+  }
+  for (const e of raw) {
+    const refs = references.get(String(e.id)) || {};
+    const group = groupFor(e.shift_ref || refs.shift_ref || (e.type === 'clock_in' ? e.id : model.groups.at(-1)?.id));
+    if (e.type === 'clock_in') group.entry = newAdminSlot(e.type, e.id, e, model.date);
+    else if (e.type === 'clock_out') group.exit = newAdminSlot(e.type, e.id, e, model.date);
+    else {
+      const br = breakFor(group, e.break_ref || refs.break_ref || (e.type === 'break_start' ? e.id : group.breaks.at(-1)?.id));
+      br[e.type === 'break_start' ? 'start' : 'end'] = newAdminSlot(e.type, e.id, e, model.date);
+    }
+  }
+  if (preferred.break_ref && model.groups.length) breakFor(groupFor(preferred.shift_ref || model.groups[0].id), preferred.break_ref);
+  if (!model.groups.length) {
+    let carry = preferred.shift_ref;
+    if (!carry) {
+      try { const boundary = localToIso(model.date, '00:00'); const before = replay(all.filter(function(e) { return Date.parse(e.event_at) < Date.parse(boundary); }), { now: boundary, includeScheduled: true }); if (before.valid) carry = before.open_shift_id; } catch {}
+    }
+    const group = groupFor(carry);
+    if (preferred.break_ref) breakFor(group, preferred.break_ref);
+  }
+  model.groups.forEach(function(group) {
+    if (!group.exit.original) {
+      const anchor = all.find(function(e) { return !['void','rejected','draft'].includes(e.status) && e.type === 'clock_out' && String(e.shift_ref || references.get(String(e.id))?.shift_ref) === String(group.id); });
+      if (anchor) group.exit = newAdminSlot('clock_out', anchor.id, anchor, model.date, { anchor: true });
+    }
+    group.breaks.forEach(function(br) {
+      if (!br.end.original) {
+        const anchor = all.find(function(e) { return !['void','rejected','draft'].includes(e.status) && e.type === 'break_end' && String(e.break_ref || references.get(String(e.id))?.break_ref) === String(br.id); });
+        if (anchor) br.end = newAdminSlot('break_end', anchor.id, anchor, model.date, { anchor: true });
+      }
+    });
+    if (!group.breaks.length) group.breaks.push(newAdminBreak(group));
+  });
+  return model;
+}
+function adminSlotHtml(slot, group, br = null) {
+  const prefix = 'admin_' + slot.key;
+  const label = ACTIONS[slot.type];
+  const saved = slot.original;
+  const marker = saved?.status === 'draft' ? '<span class="badge">Πρόχειρη · αναμονή προϋποθέσεων</span>' : (saved && isScheduledEvent(saved) ? '<span class="badge planned">Ορισμένη ώρα</span>' : (saved?.source === 'admin' ? '<span class="badge">Από διαχειριστή</span>' : ''));
+  if (slot.readonly) return '<section class="admin-slot anchor"><div class="admin-slot-title"><strong>' + esc(label) + '</strong><span class="badge">Άλλη ημέρα</span></div><p class="mono">' + esc(displayDate(saved.event_at)) + ' · ' + esc(displayTime(saved.event_at, true)) + '</p><small>Η αρχική κίνηση διατηρείται. Άλλαξέ την από την αντίστοιχη ημέρα.</small></section>';
+  return '<section class="admin-slot' + (slot.remove ? ' removed' : '') + '" data-admin-slot="' + esc(slot.key) + '"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker +
+    (saved ? button(slot.remove ? 'Επαναφορά' : 'Ακύρωση', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', 'text small') : '') + '</div>' +
+    (slot.remove ? '<p class="muted">Θα ακυρωθεί με την αποθήκευση. Το ιστορικό διατηρείται.</p>' : '<div class="admin-time-fields">' +
+      field('Ημερομηνία', prefix + '_date', slot.date, 'date', 'data-dst="' + esc(prefix) + '"') +
+      field('Ώρα Αθήνας', prefix + '_time', slot.time, 'time', 'step="1" data-dst="' + esc(prefix) + '"') +
+      '<div class="field full dst-choice hidden" data-dst-choice="' + esc(prefix) + '"><label>Εμφάνιση ώρας</label><select name="' + esc(prefix) + '_occurrence">' + option('', 'Επίλεξε εμφάνιση', slot.occurrence) + option('earlier', 'Πρώτη εμφάνιση', slot.occurrence) + option('later', 'Δεύτερη εμφάνιση', slot.occurrence) + '</select></div></div>' +
+      (slot.type === 'clock_out' ? '<label class="check-label admin-close-break"><input type="checkbox" name="' + esc(prefix) + '_close"' + (slot.closes_open_break ? ' checked' : '') + '>Στην έξοδο κλείνει και τυχόν ανοιχτό διάλειμμα</label>' : '')) + '</section>';
+}
+function captureAdminDayFields(form = document.getElementById('modal-form')) {
+  if (!form?.elements || !state.adminDay) return;
+  adminSlots().forEach(function(slot) {
+    const prefix = 'admin_' + slot.key; const f = form.elements;
+    if (slot.readonly || slot.remove) return;
+    if (f[prefix + '_date']) slot.date = f[prefix + '_date'].value;
+    if (f[prefix + '_time']) slot.time = f[prefix + '_time'].value;
+    if (f[prefix + '_occurrence']) slot.occurrence = f[prefix + '_occurrence'].value;
+    if (f[prefix + '_close']) slot.closes_open_break = f[prefix + '_close'].checked;
+  });
+  if (form.elements.admin_reason) state.adminDay.reason = form.elements.admin_reason.value;
+}
+function renderAdminDayEditor() {
+  const model = state.adminDay; if (!model || !isAdmin()) return;
+  const body = banner('Μπορείς να ορίσεις ώρες χωρίς προηγούμενα χτυπήματα. Οι μελλοντικές ώρες ισχύουν όταν φτάσει η ώρα τους. Ελλιπείς νέες κινήσεις μένουν πρόχειρες μέχρι να συμπληρωθούν οι προϋποθέσεις.', '') +
+    '<div class="admin-day-groups">' + model.groups.map(function(group, index) {
+      return '<section class="admin-shift"><div class="admin-shift-title"><h3>' + (index + 1) + 'η βάρδια</h3></div><div class="admin-shift-ends">' + adminSlotHtml(group.entry, group) + adminSlotHtml(group.exit, group) + '</div>' +
+        '<div class="admin-breaks">' + group.breaks.map(function(br, i) { return '<div class="admin-break"><h4>' + (i + 1) + 'ο διάλειμμα</h4><div class="admin-shift-ends">' + adminSlotHtml(br.start, group, br) + adminSlotHtml(br.end, group, br) + '</div></div>'; }).join('') + '</div>' +
+        button('+ Νέο διάλειμμα', 'admin-add-break', 'data-group="' + esc(group.id) + '"', 'text small') + '</section>';
+    }).join('') + '</div>' + button('+ Νέα βάρδια', 'admin-add-shift', '', 'text') +
+    '<div class="field"><label for="f-admin_reason">Αιτιολογία καταχώρησης</label><textarea name="admin_reason" id="f-admin_reason" required minlength="3" maxlength="1000" placeholder="Π.χ. ορισμός ωρών από τον διαχειριστή">' + esc(model.reason || '') + '</textarea></div>' +
+    '<p class="field-help">Συμπλήρωσε μόνο όσα θέλεις να ορίσεις. Τα κενά πεδία παραμένουν διαθέσιμα και δεν δημιουργούν χτυπήματα. Οι αλλαγές αποθηκεύονται όλες μαζί.</p>';
+  openModal('Ώρες ημέρας', personName(model.employeeId) + ' · ' + dateDisplay(model.date), body, submitButton('Αποθήκευση ωρών'), 'admin-day');
+}
+async function openAdminDay(employeeId, date, preferred = {}) {
+  if (!isAdmin() || !employeeId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
+  const token = ++state.adminDayLoadToken;
+  const view = state.view, selected = view === 'stats' ? state.statsId : (view === 'history' ? state.historyId : null);
+  try {
+    const data = await api.read('admin_day', { employee_id: employeeId, date });
+    if (token !== state.adminDayLoadToken || !isAdmin() || state.view !== view || (view === 'stats' && state.statsId !== selected) || (view === 'history' && state.historyId !== selected)) return;
+    setServerTime(data.server_now);
+    state.adminDay = buildAdminDayModel({ ...data, date, employee: data.employee || employee(employeeId) }, preferred);
+    const model = state.adminDay;
+    let group = model.groups.find(function(g) { return String(g.id) === String(preferred.shift_ref); }) || model.groups[0];
+    if (preferred.add === 'shift') { group = newAdminShift(date); group.breaks.push(newAdminBreak(group)); model.groups.push(group); }
+    if (preferred.add === 'break') {
+      const blank = group.breaks.find(function(br) { return !br.start.original && !br.end.original && !br.start.time && !br.end.time; });
+      if (!blank) group.breaks.push(newAdminBreak(group));
+    }
+    const slots = adminSlots(model);
+    let focus = preferred.event_id ? slots.find(function(s) { return String(s.id) === String(preferred.event_id); }) : null;
+    if (!focus && preferred.type) {
+      const br = preferred.break_ref ? group.breaks.find(function(b) { return String(b.id) === String(preferred.break_ref); }) : null;
+      focus = br ? br[preferred.type === 'break_end' ? 'end' : 'start'] : slots.find(function(s) { return s.type === preferred.type && !s.readonly && !s.time; });
+    }
+    if (focus && !focus.original && preferred.time) { const v = dateTimeValues(preferred.time); focus.date = v.date; focus.time = v.time; }
+    renderAdminDayEditor();
+    if (focus) setTimeout(function() { modal.querySelector('[name="admin_' + focus.key + '_time"]')?.focus(); }, 50);
+  } catch (error) { toast(error.message || 'Δεν φορτώθηκαν οι ώρες ημέρας.', 'error'); }
+}
+function adminDayEntriesFromForm(form) {
+  captureAdminDayFields(form);
+  const model = state.adminDay; const entries = [];
+  for (const group of model.groups) {
+    for (const slot of [group.entry, ...group.breaks.flatMap(function(br) { return [br.start, br.end]; }), group.exit]) {
+      if (slot.readonly) continue;
+      if (slot.remove) { if (slot.original) entries.push({ id: slot.id, remove: true }); continue; }
+      if (!slot.time) { if (slot.original?.event_at) throw new Error('Για να αφαιρέσεις υπάρχουσα ώρα, επίλεξε Ακύρωση στην αντίστοιχη κίνηση.'); continue; }
+      const originalValues = slot.original?.event_at ? dateTimeValues(slot.original.event_at) : null;
+      const normalizedTime = /^\d{2}:\d{2}$/.test(slot.time) ? slot.time + ':00' : slot.time;
+      const unchangedClock = originalValues && originalValues.date === slot.date && originalValues.time === normalizedTime && slot.occurrence === slot.initial_occurrence;
+      const at = unchangedClock ? slot.original.event_at : localToIso(slot.date, slot.time, { disambiguation: slot.occurrence || 'reject' });
+      const br = group.breaks.find(function(b) { return b.start === slot || b.end === slot; });
+      if (slot.original && at === slot.original.event_at && slot.closes_open_break === Boolean(slot.original.closes_open_break)) continue;
+      entries.push({ id: slot.id, type: slot.type, event_at: at, shift_ref: group.id,
+        ...(br ? { break_ref: br.id } : {}), ...(slot.type === 'clock_out' ? { closes_open_break: slot.closes_open_break } : {}) });
+    }
+  }
+  return entries;
 }
 function renderStats() {
   const data = state.monthData;
   if (!state.statsId) return heading('Παρουσιολόγιο', 'Ώρες παρουσίας, διαλείμματα και ημερήσιες σημειώσεις.') + '<section class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</section>';
   state.stats = data ? monthlyStats(data.events || [], {
     month: state.month, employee: data.employee, notes: data.notes || [], settings: data.settings || state.context.settings,
-    now: data.server_now || now(), includePending: state.statsMode === 'effective'
+    now: now(), includePending: state.statsMode === 'effective'
   }) : null;
   const stats = state.stats;
+  const projected = data ? monthlyStats(data.events || [], { month: state.month, employee: data.employee, notes: data.notes || [], settings: data.settings || state.context.settings,
+    now: now(), includePending: state.statsMode === 'effective', includeScheduled: true }) : null;
+  const previewDays = new Map((projected?.days || []).map(function(day) { return [day.date, day]; }));
+  const rawEvents = data?.events || [];
+  const rawById = new Map(rawEvents.map(function(e) { return [String(e.id), e]; }));
+  const due = rawEvents.filter(isScheduledEvent).map(function(e) { return Date.parse(e.event_at); });
+  state.nextScheduledRefresh = due.length ? Math.min(...due) : 0;
   const totals = stats?.totals || {};
   return heading('Παρουσιολόγιο', 'Οι ώρες περιλαμβάνουν τα διαλείμματα. Οι ανοιχτές βάρδιες εμφανίζονται χωριστά.', button('Εξαγωγή CSV', 'export-stats', stats ? '' : 'disabled')) +
     '<section class="card"><div class="filter-row">' + selectField('Εργαζόμενος', 'stats_employee', employeeOptions(state.statsId)) +
     field('Μήνας', 'stats_month', state.month, 'month', 'required') + selectField('Υπολογισμός', 'stats_mode', option('effective', 'Μαζί με τις εκκρεμείς διορθώσεις', state.statsMode) + option('approved', 'Μόνο εγκεκριμένες καταγραφές', state.statsMode)) + '</div>' +
     (stats?.has_pending && state.statsMode === 'effective' ? banner('Τα σύνολα περιλαμβάνουν εκκρεμείς διορθώσεις και παραμένουν προσωρινά μέχρι να ελεγχθούν.', 'warning') : '') +
+    (projected?.has_scheduled ? banner('Οι ορισμένες μελλοντικές ώρες εμφανίζονται με μπλε ένδειξη. Θα ισχύσουν όταν φτάσει η ώρα τους και δεν προστίθενται πρόωρα στα σημερινά σύνολα.') : '') +
     (stats?.issues?.length ? banner('Υπάρχουν κινήσεις που χρειάζονται έλεγχο. Οι ακολουθίες που δεν ολοκληρώνονται σωστά δεν υπολογίζονται ως πλήρης παρουσία.', 'warning') : '') +
     '<div class="metric-grid">' + metric('Ώρες παρουσίας', formatMinutes(totals.gross_minutes || 0), (totals.worked_days || 0) + ' ημέρες με ολοκληρωμένη παρουσία') +
     metric('Διαλείμματα', formatMinutes(totals.break_minutes || 0), (totals.break_count || 0) + ' διαλείμματα · δεν αφαιρούνται') +
@@ -407,18 +588,28 @@ function renderStats() {
     metric('Διαφορά από στόχο', formatMinutes(totals.variance_minutes || 0), 'Δεν αποτελεί υπολογισμό νόμιμης υπερωρίας') + '</div>' +
     (stats ? '<div class="table-wrap"><table><thead><tr><th>Ημέρα</th><th>Βάρδιες</th><th>Διαλείμματα</th><th>Παρουσία</th><th>Καθυστέρηση</th><th>Σημειώσεις</th></tr></thead><tbody>' +
     stats.days.map(function(day) {
-      return '<tr class="' + (day.pending_count ? 'subtle-row' : '') + '"><td class="' + ([0, 6].includes(day.weekday) ? 'day-weekend' : '') + '"><strong class="mono">' + esc(dateDisplay(day.date)) + '</strong><span class="day-name">' + esc(shortDay(day.date)) + '</span></td>' +
-      '<td>' + (day.shifts.length ? day.shifts.map(function(shift, index) {
-        return '<span class="shift-line">' + (index ? '<small>' + (index + 1) + 'η · </small>' : '') + timeCell(shift.start_at, shift.start_id, state.statsId) + ' → ' + timeCell(shift.end_at, shift.end_id, state.statsId) +
+      const preview = previewDays.get(day.date) || day;
+      const drafts = rawEvents.filter(function(e) { return e.status === 'draft' && (e.admin_day || dateKey(e.event_at)) === day.date; });
+      const planned = rawEvents.some(function(e) { return isScheduledEvent(e) && dateKey(e.event_at) === day.date; });
+      const dayAttrs = 'data-employee="' + esc(state.statsId) + '" data-date="' + esc(day.date) + '"';
+      return '<tr class="' + (day.pending_count ? 'subtle-row' : '') + '"><td class="' + ([0, 6].includes(day.weekday) ? 'day-weekend' : '') + '"><strong class="mono">' + esc(dateDisplay(day.date)) + '</strong><span class="day-name">' + esc(shortDay(day.date)) + '</span>' + (isAdmin() ? button('Ώρες ημέρας', 'admin-day', dayAttrs, 'text small') : '') + '</td>' +
+      '<td>' + (preview.shifts.length ? preview.shifts.map(function(shift, index) {
+        return '<span class="shift-line">' + (index ? '<small>' + (index + 1) + 'η · </small>' : '') + timeCell(shift.start_at, shift.start_id, state.statsId, { date: day.date, type: 'clock_in', shift_ref: shift.start_id }) + ' → ' + timeCell(shift.end_at, shift.end_id, state.statsId, { date: day.date, type: 'clock_out', shift_ref: shift.start_id }) +
           (shift.pending ? ' <span class="badge amber">Προσωρινή</span>' : '') +
+          ([shift.start_id, shift.end_id].some(function(id) { return isScheduledEvent(rawById.get(String(id))); }) ? ' <span class="badge planned">Ορισμένη ώρα</span>' : '') +
           (shift.carried_in ? '<small class="break-line">Από ' + esc(displayDate(shift.start_at)) + '</small>' : '') +
-          (!shift.closed ? '<small class="break-line">Χωρίς έξοδο · ανοιχτή βάρδια</small>' : (shift.carried_out ? '<small class="break-line">Έως ' + esc(displayDate(shift.end_at)) + '</small>' : '')) + '</span>';
-      }).join('') : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + (day.shifts.flatMap(function(shift) { return shift.breaks || []; }).map(function(br) {
-        return '<span class="break-line">' + timeCell(br.start_at, br.start_id, state.statsId) + ' → ' + timeCell(br.end_at, br.end_id, state.statsId) + (!br.closed ? ' · ανοιχτό' : ' · ' + esc(formatMinutes(br.minutes))) + '</span>';
-      }).join('') || '<span class="muted">—</span>') +
+          (!shift.closed ? '<small class="break-line">Χωρίς έξοδο · ανοιχτή βάρδια</small>' : (shift.carried_out ? '<small class="break-line">Έως ' + esc(displayDate(shift.end_at)) + '</small>' : '')) +
+          (isAdmin() ? button('+ Διάλειμμα', 'admin-day', dayAttrs + ' data-add="break" data-shift="' + esc(shift.start_id || '') + '"', 'text small') : '') + '</span>';
+      }).join('') : timeCell(null, null, state.statsId, { date: day.date, type: 'clock_in' }) + ' → ' + timeCell(null, null, state.statsId, { date: day.date, type: 'clock_out' })) +
+      (isAdmin() && preview.shifts.length ? button('+ Βάρδια', 'admin-day', dayAttrs + ' data-add="shift"', 'text small') : '') +
+      drafts.map(function(e) { return '<small class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' ' + esc(displayTime(e.event_at)) + (isAdmin() ? ' ' + button('Συμπλήρωση', 'admin-day', dayAttrs + ' data-id="' + esc(e.id) + '"', 'text small') : '') + '</small>'; }).join('') + '</td>' +
+      '<td>' + (preview.shifts.flatMap(function(shift) { return (shift.breaks || []).map(function(br) { return { ...br, shift_ref: shift.start_id }; }); }).map(function(br) {
+        return '<span class="break-line">' + timeCell(br.start_at, br.start_id, state.statsId, { date: day.date, type: 'break_start', shift_ref: br.shift_ref, break_ref: br.start_id }) + ' → ' + timeCell(br.end_at, br.generated_end ? null : br.end_id, state.statsId, { date: day.date, type: 'break_end', shift_ref: br.shift_ref, break_ref: br.start_id }) +
+          (br.generated_end ? ' <small>Κλείσιμο με την έξοδο</small>' : '') + (!br.closed ? ' · ανοιχτό' : ' · ' + esc(formatMinutes(br.minutes))) + '</span>';
+      }).join('') || timeCell(null, null, state.statsId, { date: day.date, type: 'break_start', shift_ref: preview.shifts[0]?.start_id }) + ' → ' + timeCell(null, null, state.statsId, { date: day.date, type: 'break_end', shift_ref: preview.shifts[0]?.start_id })) +
       (day.break_count ? '<small class="break-line">Σύνολο: ' + esc(formatMinutes(day.break_minutes)) + (day.break_excess_minutes ? ' · υπέρβαση ' + esc(formatMinutes(day.break_excess_minutes)) : '') + '</small>' : '') + '</td>' +
       '<td><strong class="mono">' + (day.gross_minutes ? esc(formatMinutes(day.gross_minutes)) : '—') + '</strong>' +
+        (planned && preview.gross_minutes ? '<small class="planned-line">Ορισμένη παρουσία: ' + esc(formatMinutes(preview.gross_minutes)) + '</small>' : '') +
         (day.has_open_shift ? '<small class="break-line">Ανοιχτή: ' + esc(formatMinutes(day.estimated_open_minutes)) + '</small>' : '') +
         (day.pending_count ? '<small class="break-line">' + day.pending_count + ' εκκρεμείς κινήσεις</small>' : '') + '</td>' +
       '<td class="mono">' + (day.late_minutes ? esc(formatMinutes(day.late_minutes)) : '—') + '</td><td>' +
@@ -494,8 +685,10 @@ async function recordAction(type) {
   if (!canRecord() || !state.selectedId) return;
   const id = state.selectedId;
   try {
-    await command('record', { employee_id: id, type });
-    toast(ACTIONS[type] + ' καταγράφηκε.', 'success');
+    const response = await command('record', { employee_id: id, type });
+    const result = response?.result || response || {};
+    if (result.already_recorded) toast(result.message || (ACTIONS[type] + ' έχει ήδη οριστεί' + (result.event?.event_at ? ' στις ' + displayTime(result.event.event_at) : '') + '.'), 'success');
+    else toast(result.message || (ACTIONS[type] + ' καταγράφηκε.'), 'success');
     await loadView('record', true);
   } catch (error) {
     if (error.uncertain) { toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
@@ -540,6 +733,7 @@ async function openEventEdit(id, employeeId) {
     ev = data.events.find(function(e) { return String(e.id) === String(id); });
   }
   if (!ev) { toast('Η κίνηση δεν βρέθηκε. Ανανέωσε την οθόνη.', 'error'); return; }
+  if (ev.source === 'admin' || ev.status === 'draft') { await openAdminDay(ev.employee_id, ev.admin_day || dateKey(ev.event_at), { event_id: ev.id, type: ev.type, shift_ref: ev.shift_ref, break_ref: ev.break_ref }); return; }
   state.modalEvent = ev;
   openModal('Αλλαγή ώρας καταγραφής', personName(ev.employee_id) + ' · ' + ACTIONS[ev.type],
     '<div class="form-grid">' + dateTimeFields(ev.event_at, 'edit') + '<div class="field full"><label for="f-reason">Αιτιολογία αλλαγής</label><textarea name="reason" id="f-reason" required maxlength="1000"></textarea></div></div>' +
@@ -623,7 +817,7 @@ function exportStats() {
 async function logout(message = '') {
   if (state.busy) return;
   closeModal(); state.loadToken++; state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null;
-  state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.overview = null; state.requests = null; state.adminData = null;
+  state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
   try { await api.signOut(); } catch {}
   state.authMessage = message; state.authError = false; renderLogin();
 }
@@ -643,6 +837,21 @@ async function handleAction(action, node) {
   if (action === 'related-history') {
     state.historyId = state.modalEvent?.employee_id || state.historyId; state.historyFrom = ''; state.historyTo = ''; state.historyStatus = ''; state.historyType = '';
     closeModal(); await navigate('history'); return;
+  }
+  if (action === 'admin-day') {
+    await openAdminDay(node.dataset.employee || state.statsId, node.dataset.date, { event_id: node.dataset.id, type: node.dataset.type, shift_ref: node.dataset.shift, break_ref: node.dataset.break, time: node.dataset.time, add: node.dataset.add }); return;
+  }
+  if (action === 'admin-day-reload') { const model = state.adminDay; if (model) await openAdminDay(model.employeeId, model.date); return; }
+  if (action === 'admin-add-shift' || action === 'admin-add-break' || action === 'admin-remove-slot') {
+    if (!isAdmin() || !state.adminDay) return;
+    captureAdminDayFields();
+    if (action === 'admin-remove-slot') { const slot = adminSlots().find(function(s) { return s.key === node.dataset.key; }); if (slot && slot.original && !slot.readonly) slot.remove = !slot.remove; }
+    else {
+      if (adminSlots().length >= 80) { toast('Αποθήκευσε πρώτα τις υπάρχουσες ώρες πριν προσθέσεις περισσότερες.'); return; }
+      if (action === 'admin-add-shift') { const group = newAdminShift(state.adminDay.date); group.breaks.push(newAdminBreak(group)); state.adminDay.groups.push(group); }
+      else { const group = state.adminDay.groups.find(function(g) { return String(g.id) === node.dataset.group; }); if (group) group.breaks.push(newAdminBreak(group)); }
+    }
+    renderAdminDayEditor(); return;
   }
   if (action === 'open-correction') {
     const id = node.dataset.id;
@@ -711,6 +920,19 @@ async function handleModalForm(form, decision) {
   const kind = form.dataset.kind;
   const f = form.elements;
   try {
+    if (kind === 'admin-day') {
+      if (!isAdmin() || !state.adminDay) throw new Error('Απαιτείται διαχειριστής.');
+      const entries = adminDayEntriesFromForm(form);
+      if (!entries.length) { closeModal(); toast('Δεν υπάρχουν νέες αλλαγές.'); return; }
+      const reason = String(f.admin_reason?.value || '').trim();
+      if (reason.length < 3) throw new Error('Συμπλήρωσε σύντομη αιτιολογία για τις ώρες που ορίζεις.');
+      const model = state.adminDay;
+      const response = await command('admin_day_save', { employee_id: model.employeeId, date: model.date, expected_revision: model.revision, entries, reason });
+      const result = response?.result || response || {};
+      closeModal();
+      toast(result.drafts?.length ? 'Οι ώρες αποθηκεύτηκαν. Οι πρόχειρες κινήσεις περιμένουν να συμπληρωθούν οι προϋποθέσεις τους.' : 'Οι ώρες ημέρας αποθηκεύτηκαν.', 'success');
+      await refreshApp(); return;
+    }
     if (kind === 'correction') {
       const entries = Array.from(form.querySelectorAll('.correction-entry')).map(function(section) {
         const prefix = 'entry_' + section.dataset.entry;
@@ -800,6 +1022,10 @@ function tick() {
     el.textContent = (h ? String(h).padStart(2, '0') + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
   });
   const ctx = state.context;
+  if (ctx && state.view === 'stats' && state.nextScheduledRefresh && now().getTime() >= state.nextScheduledRefresh && !state.busy && !modal.open && !document.hidden) {
+    state.nextScheduledRefresh = 0;
+    loadView('stats', true).catch(function(error) { setConnection(false); toast(error.message, 'error'); });
+  }
   if (ctx && ['admin', 'reviewer'].includes(ctx.role) && !state.busy && !state.idleLogout && Date.now() - state.lastActivity > Number(ctx.settings?.idle_timeout_minutes || 10) * 60000) {
     state.idleLogout = true;
     logout('Η συνεδρία έληξε λόγω αδράνειας. Συνδέσου ξανά για να συνεχίσεις.').finally(function() { state.idleLogout = false; });
@@ -836,6 +1062,7 @@ document.addEventListener('input', function(event) {
 modal.addEventListener('cancel', function(event) { if (state.busy) event.preventDefault(); });
 window.addEventListener('offline', function() { setConnection(false); });
 window.addEventListener('online', function() { if (state.context && !state.busy) refreshApp(); });
+document.addEventListener('visibilitychange', function() { if (!document.hidden && state.context && !state.busy && !modal.open) refreshApp(); });
 setInterval(tick, 1000);
 setInterval(function() {
   if (!state.context || state.busy || modal.open || document.hidden || !['record', 'overview'].includes(state.view)) return;
@@ -843,7 +1070,7 @@ setInterval(function() {
 }, 30000);
 if (typeof api.subscribe === 'function') api.subscribe(function(session) {
   if (!session && state.context) {
-    state.context = null; state.loadToken++; modal.close(); state.authMessage = 'Συνδέσου ξανά για να συνεχίσεις.'; state.authError = false; renderLogin();
+    state.context = null; state.loadToken++; state.adminDayLoadToken++; state.adminDay = null; state.nextScheduledRefresh = 0; modal.close(); state.authMessage = 'Συνδέσου ξανά για να συνεχίσεις.'; state.authError = false; renderLogin();
   }
 });
 async function initialize() {

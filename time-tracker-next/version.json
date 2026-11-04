@@ -1,1 +1,10 @@
-{"version":"1.0.1","sourceRepository":"empapadakos/time-tracker-next","sourceCommit":"4154b572a4271c754a28d01c320ac9e64d3bb25e","publishedAt":"2026-11-04T17:29:30.915Z"}
+{
+  "version": "1.1.0",
+  "sourceCommit": "cbe32b1834791bf2c7f4e55f73c5e0d935d12d67",
+  "build": "static-fingerprinted",
+  "databaseMigrations": [
+    "time_tracker_next_initial",
+    "time_tracker_next_admin_times",
+    "time_tracker_next_admin_receipts_read_consistency"
+  ]
+}

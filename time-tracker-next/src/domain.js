@@ -113,9 +113,9 @@ function actionMessage(state,expected) {
 }
 
 /** Replay the full effective history; invalid transitions never silently change state. */
-export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDailyShifts,max_daily_shifts,includePending=true,validateFuture=true}={}) {
+export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDailyShifts,max_daily_shifts,includePending=true,includeScheduled=false,validateFuture=true}={}) {
   timeZone=timezone||timeZone;
-  const timeline=effectiveEvents(events,{includePending}),issues=[],accepted=[],counts={};
+  const timeline=effectiveEvents(events,{includePending}),issues=[],accepted=[],counts={},scheduled=[];
   let state='OUT',openShift=null,openBreak=null,lastEvent=null;
   const current=instant(now),currentPrecise=instantNanos(now),limit=Number(maxDailyShifts??max_daily_shifts)||null;
   const issue=(event,expected_actions,message,code='invalid_transition')=>issues.push({code,event_id:event.id??null,type:event.type,event_at:event.event_at,state_before:state,expected_actions:[...expected_actions],suggested_date:openBreak?dateKey(openBreak.event_at,timeZone):openShift?dateKey(openShift.event_at,timeZone):(instant(event.event_at)!==null?dateKey(event.event_at,timeZone):null),message});
@@ -123,8 +123,17 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
     const ms=instant(event.event_at);
     if(ms===null){issue(event,[],'Η εγγραφή έχει μη έγκυρη ημερομηνία.','invalid_timestamp');continue;}
     if(!ACTIONS.includes(event.type)){issue(event,[],'Άγνωστος τύπος ενέργειας.','unknown_action');continue;}
-    if(validateFuture&&currentPrecise!==null&&instantNanos(event.event_at)>currentPrecise){issue(event,[],'Μια μελλοντική διόρθωση δεν μπορεί να καλύψει σημερινή ενέργεια.','future_event');continue;}
-    const next=NEXT[state]?.[event.type];
+    const administrative=event.source==='admin'&&event.status==='approved';
+    const future=currentPrecise!==null&&instantNanos(event.event_at)>currentPrecise;
+    if(future&&administrative){scheduled.push(event);if(!includeScheduled)continue;}
+    if(validateFuture&&future&&!(administrative&&includeScheduled)){issue(event,[],'Μια μελλοντική διόρθωση δεν μπορεί να καλύψει σημερινή ενέργεια.','future_event');continue;}
+    if(administrative&&event.type!=='clock_in'&&event.shift_ref&&openShift&&String(event.shift_ref)!==String(openShift.id)){
+      issue(event,[],'Η διοικητική ώρα ανήκει σε διαφορετική βάρδια.','wrong_shift_reference');continue;
+    }
+    if(administrative&&event.type==='break_end'&&event.break_ref&&openBreak&&String(event.break_ref)!==String(openBreak.id)){
+      issue(event,[],'Η διοικητική επιστροφή ανήκει σε διαφορετικό διάλειμμα.','wrong_break_reference');continue;
+    }
+    const next=NEXT[state]?.[event.type]||(administrative&&event.closes_open_break===true&&state==='ON_BREAK'&&event.type==='clock_out'?'OUT':null);
     if(!next){const required=REQUIRED[state]?.[event.type]||[];issue(event,required,actionMessage(state,required));continue;}
     const key=dateKey(event.event_at,timeZone);
     if(event.type==='clock_in'&&limit&&(counts[key]||0)>=limit){issue(event,[],`Έχει συμπληρωθεί το όριο ${limit} βαρδιών για την ημέρα.`,'daily_shift_limit');continue;}
@@ -136,7 +145,7 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
   }
   const today=current===null?null:dateKey(current,timeZone);
   return {state,issues,open_shift_at:openShift?.event_at??null,open_break_at:openBreak?.event_at??null,open_shift_id:openShift?.id??null,open_break_id:openBreak?.id??null,pending_count:timeline.filter(e=>e.status==='pending').length,valid:issues.length===0,
-    last_event_at:lastEvent?.event_at??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:limit,timeZone,timeline,accepted_events:accepted};
+    last_event_at:lastEvent?.event_at??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:limit,timeZone,timeline,accepted_events:accepted,scheduled_events:scheduled,scheduled_count:scheduled.length,draft_count:(Array.isArray(events)?events:[]).filter(e=>e.status==='draft').length};
 }
 
 /** Describe missing prerequisites, never unlock an action merely because a request exists. */
@@ -160,7 +169,12 @@ function buildIntervals(accepted) {
     if(event.type==='clock_in'){shift={id:event.id??null,start_at:event.event_at,end_at:null,start_event:event,end_event:null,breaks:[],pending:event.status==='pending'};shifts.push(shift);}
     else if(event.type==='break_start'&&shift){activeBreak={id:event.id??null,start_at:event.event_at,end_at:null,start_event:event,end_event:null,pending:event.status==='pending'};shift.breaks.push(activeBreak);shift.pending ||= event.status==='pending';}
     else if(event.type==='break_end'&&activeBreak){activeBreak.end_at=event.event_at;activeBreak.end_event=event;activeBreak.pending ||= event.status==='pending';if(shift)shift.pending ||= event.status==='pending';activeBreak=null;}
-    else if(event.type==='clock_out'&&shift){shift.end_at=event.event_at;shift.end_event=event;shift.pending ||= event.status==='pending';shift=null;activeBreak=null;}
+    else if(event.type==='clock_out'&&shift){
+      if(activeBreak&&event.source==='admin'&&event.status==='approved'&&event.closes_open_break===true){
+        activeBreak.end_at=event.event_at;activeBreak.generated_end=true;activeBreak.admin_exit_id=event.id;
+      }
+      shift.end_at=event.event_at;shift.end_event=event;shift.pending ||= event.status==='pending';shift=null;activeBreak=null;
+    }
   }
   return shifts;
 }
@@ -176,11 +190,11 @@ function lateness(shift,employee,timeZone,index) {
 }
 
 /** Calendar-day report. Gross presence includes breaks; open intervals are estimated separately. */
-export function monthlyStats(events,{month,employee={},notes=[],settings={},now=new Date(),includePending=true,timeZone=TIMEZONE}={}) {
+export function monthlyStats(events,{month,employee={},notes=[],settings={},now=new Date(),includePending=true,includeScheduled=false,timeZone=TIMEZONE}={}) {
   timeZone=settings.timezone||timeZone;
   const keys=monthDays(month),keySet=new Set(keys),current=instant(now);
   // The server supplies the full timeline, so shifts crossing month boundaries remain pairable.
-  const result=replay(events,{now,timeZone,includePending,validateFuture:true});
+  const result=replay(events,{now,timeZone,includePending,includeScheduled,validateFuture:true});
   const shifts=buildIntervals(result.accepted_events);
   const noteMap=new Map((Array.isArray(notes)?notes:[]).filter(n=>!employee.id||!n.employee_id||String(n.employee_id)===String(employee.id)).map(n=>[n.date||n.note_date,n]));
   const target=Math.max(0,Number(settings.shift_target_minutes??480)||0),breakLimit=Math.max(0,Number(settings.break_limit_minutes??30)||0);
@@ -206,7 +220,7 @@ export function monthlyStats(events,{month,employee={},notes=[],settings={},now=
         breakMinutes+=minutes;
         if(be===null)estimatedBreak+=overlap(bs,bend,low,high)/60000;
         if(dateKey(br.start_at,timeZone)===key)breakCount++;
-        dayBreaks.push({id:br.id,start_at:br.start_at,end_at:br.end_at,start_id:br.start_event?.id??null,end_id:br.end_event?.id??null,start_text:formatTime(br.start_at,{timeZone}),end_text:formatTime(br.end_at,{timeZone}),minutes,pending:br.pending,closed:be!==null,carried_in:bs<low,carried_out:bend>high});
+        dayBreaks.push({id:br.id,start_at:br.start_at,end_at:br.end_at,start_id:br.start_event?.id??null,end_id:br.end_event?.id??null,start_text:formatTime(br.start_at,{timeZone}),end_text:formatTime(br.end_at,{timeZone}),minutes,pending:br.pending,closed:be!==null,carried_in:bs<low,carried_out:bend>high,generated_end:br.generated_end===true,admin_exit_id:br.admin_exit_id??null});
       }
       const startsToday=dateKey(shift.start_at,timeZone)===key;
       const timing=startsToday?lateness(shift,employee,timeZone,startsByDay[key].indexOf(shift)):{late_minutes:0,scheduled_start:null};
@@ -218,5 +232,5 @@ export function monthlyStats(events,{month,employee={},notes=[],settings={},now=
   });
   const totals={gross_minutes:0,break_minutes:0,break_count:0,break_excess_minutes:0,late_minutes:0,target_minutes:0,variance_minutes:0,worked_days:0,pending_count:0,estimated_open_minutes:0};
   for(const day of days){for(const key of ['gross_minutes','break_minutes','break_count','break_excess_minutes','late_minutes','target_minutes','variance_minutes','pending_count','estimated_open_minutes'])totals[key]+=day[key];if(day.gross_minutes>0)totals.worked_days++;}
-  return {month,timeZone,employee_id:employee.id??null,includePending,days,totals,issues:result.issues,state:result,has_pending:result.timeline.some(e=>e.status==='pending'&&instant(e.event_at)!==null&&keySet.has(dateKey(e.event_at,timeZone)))};
+  return {month,timeZone,employee_id:employee.id??null,includePending,includeScheduled,days,totals,issues:result.issues,state:result,has_scheduled:result.scheduled_events.some(e=>keySet.has(dateKey(e.event_at,timeZone))),has_pending:result.timeline.some(e=>e.status==='pending'&&instant(e.event_at)!==null&&keySet.has(dateKey(e.event_at,timeZone)))};
 }

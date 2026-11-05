@@ -233,7 +233,7 @@ function issueMessages(error) {
     return i.message || (i.expected_actions?.length ? 'Χρειάζεται πρώτα: ' + i.expected_actions.map(function(a) { return ACTIONS[a] || a; }).join(' → ') : '');
   })).filter(Boolean).filter(function(v, i, all) { return all.indexOf(v) === i; }).join('\n');
 }
-function modalError(error) {
+function modalError(error, kind = '') {
   const node = document.getElementById('modal-error');
   if (!node) { toast(issueMessages(error), 'error'); return; }
   node.textContent = issueMessages(error);
@@ -242,6 +242,11 @@ function modalError(error) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'admin-day-reload'; b.textContent = 'Φόρτωση νεότερων ωρών'; node.append(p, b);
   }
   if (isAdmin() && error.details?.code === 'DEPENDENT_EVENTS') {
+    if (kind === 'admin-day') {
+      const p = document.createElement('p'); p.textContent = 'Δεν διαγράφηκε καμία ώρα. Επίλεξε «Διαγραφή ώρας» και στις σχετικές κινήσεις που θέλεις να αφαιρέσεις, ώστε η ακολουθία να παραμένει σωστή, και αποθήκευσέ τες μαζί. Κίνηση άλλης ημέρας αλλάζει από την αντίστοιχη ημέρα.';
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'related-history'; b.dataset.employee = state.adminDay?.employeeId || ''; b.textContent = 'Άνοιγμα σχετικών καταγραφών';
+      node.append(p, b); return;
+    }
     const p = document.createElement('p'); p.textContent = 'Μπορείς να επιλέξεις τις σχετικές κινήσεις στις Καταγραφές και να τις ακυρώσεις μαζί.';
     const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'related-history'; b.textContent = 'Άνοιγμα σχετικών καταγραφών';
     node.append(p, b);
@@ -754,8 +759,8 @@ function adminSlotHtml(slot, group, br = null) {
   const marker = saved?.source === 'history_cleanup' ? '<span class="badge amber">Εκτιμώμενη παλιά ώρα</span>' : (saved?.status === 'draft' ? '<span class="badge">Πρόχειρη · αναμονή προϋποθέσεων</span>' : (saved && isScheduledEvent(saved) ? '<span class="badge planned">Ορισμένη ώρα</span>' : (saved?.source === 'admin' ? '<span class="badge">Από διαχειριστή</span>' : '')));
   if (slot.readonly) return '<section class="admin-slot anchor"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker + '<span class="badge">Άλλη ημέρα</span></div><p class="mono">' + esc(displayDate(saved.event_at)) + ' · ' + esc(displayTime(saved.event_at, true)) + '</p><small>Η αρχική κίνηση διατηρείται. Άλλαξέ την από την αντίστοιχη ημέρα.</small></section>';
   return '<section class="admin-slot' + (slot.remove ? ' removed' : '') + '" data-admin-slot="' + esc(slot.key) + '"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker +
-    (saved ? button(slot.remove ? 'Επαναφορά' : 'Ακύρωση', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', 'text small') : '') + '</div>' +
-    (slot.remove ? '<p class="muted">Θα ακυρωθεί με την αποθήκευση. Το ιστορικό διατηρείται.</p>' : '<div class="admin-time-fields">' +
+    (saved ? button(slot.remove ? 'Αναίρεση διαγραφής' : 'Διαγραφή ώρας', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', slot.remove ? 'text small' : 'text small danger') : '') + '</div>' +
+    (slot.remove ? '<p class="muted">Η ώρα ' + esc(displayDate(saved.event_at)) + ' στις <strong class="mono">' + esc(displayTime(saved.event_at)) + '</strong> θα αφαιρεθεί από το παρουσιολόγιο όταν πατήσεις «Αποθήκευση ωρών». Το ίχνος της αλλαγής διατηρείται στο ιστορικό.</p>' : '<div class="admin-time-fields">' +
       field('Ημερομηνία', prefix + '_date', slot.date, 'date', 'data-dst="' + esc(prefix) + '"') +
       field('Ώρα', prefix + '_time', slot.time, 'time', 'data-dst="' + esc(prefix) + '"') +
       '<div class="field full dst-choice hidden" data-dst-choice="' + esc(prefix) + '"><label>Εμφάνιση ώρας</label><select name="' + esc(prefix) + '_occurrence">' + option('', 'Επίλεξε εμφάνιση', slot.occurrence) + option('earlier', 'Πρώτη εμφάνιση', slot.occurrence) + option('later', 'Δεύτερη εμφάνιση', slot.occurrence) + '</select></div></div>' +
@@ -782,7 +787,8 @@ function renderAdminDayEditor() {
         button('+ Νέο διάλειμμα', 'admin-add-break', 'data-group="' + esc(group.id) + '"', 'text small') + '</section>';
     }).join('') + '</div>' + button('+ Νέα βάρδια', 'admin-add-shift', '', 'text') +
     '<div class="field"><label for="f-admin_reason">Αιτιολογία καταχώρησης</label><textarea name="admin_reason" id="f-admin_reason" required minlength="3" maxlength="1000" placeholder="Π.χ. ορισμός ωρών από τον διαχειριστή">' + esc(model.reason || '') + '</textarea></div>' +
-    '<p class="field-help">Συμπλήρωσε μόνο όσα θέλεις να ορίσεις. Τα κενά πεδία παραμένουν διαθέσιμα και δεν δημιουργούν χτυπήματα. Οι αλλαγές αποθηκεύονται όλες μαζί.</p>';
+    '<p class="field-help">Συμπλήρωσε μόνο όσα θέλεις να ορίσεις. Τα κενά πεδία παραμένουν διαθέσιμα και δεν δημιουργούν χτυπήματα. Οι αλλαγές αποθηκεύονται όλες μαζί.</p>' +
+    '<p class="field-help">Για λανθασμένη υπάρχουσα καταγραφή, επίλεξε «Διαγραφή ώρας» και αποθήκευσε. Δεν αφαιρούνται αυτόματα άλλες κινήσεις: αν εξαρτώνται από αυτήν, επίλεξέ τες επίσης για διαγραφή, ώστε η ακολουθία να παραμένει σωστή.</p>';
   openModal('Ώρες ημέρας', personName(model.employeeId) + ' · ' + dateDisplay(model.date), body, submitButton('Αποθήκευση ωρών'), 'admin-day');
 }
 async function openAdminDay(employeeId, date, preferred = {}) {
@@ -819,7 +825,7 @@ function adminDayEntriesFromForm(form) {
     for (const slot of [group.entry, ...group.breaks.flatMap(function(br) { return [br.start, br.end]; }), group.exit]) {
       if (slot.readonly) continue;
       if (slot.remove) { if (slot.original) entries.push({ id: slot.id, remove: true }); continue; }
-      if (!slot.time) { if (slot.original?.event_at) throw new Error('Για να αφαιρέσεις υπάρχουσα ώρα, επίλεξε Ακύρωση στην αντίστοιχη κίνηση.'); continue; }
+      if (!slot.time) { if (slot.original?.event_at) throw new Error('Για να αφαιρέσεις υπάρχουσα ώρα, επίλεξε «Διαγραφή ώρας» στην αντίστοιχη κίνηση και μετά «Αποθήκευση ωρών».'); continue; }
       const at = minuteTimeToIso(slot.date, slot.time, {original: slot.original?.event_at, choice: slot.occurrence || 'reject', allowSeconds: true});
       const br = group.breaks.find(function(b) { return b.start === slot || b.end === slot; });
       if (slot.original && at === slot.original.event_at && slot.closes_open_break === Boolean(slot.original.closes_open_break)) continue;
@@ -1386,7 +1392,7 @@ async function handleAction(action, node) {
   if (action === 'record-action') { await recordAction(node.dataset.type); return; }
   if (action === 'person-history') { state.historyId = node.dataset.id; state.historyDataset = 'current'; state.historyStatus = ''; await navigate('history'); return; }
   if (action === 'related-history') {
-    state.historyId = state.modalEvent?.employee_id || state.historyId; state.historyDataset = 'current'; state.historyFrom = ''; state.historyTo = ''; state.historyStatus = ''; state.historyType = '';
+    state.historyId = node.dataset.employee || state.modalEvent?.employee_id || state.historyId; state.historyDataset = 'current'; state.historyFrom = ''; state.historyTo = ''; state.historyStatus = ''; state.historyType = '';
     closeModal(); await navigate('history'); return;
   }
   if (action === 'admin-day') {
@@ -1603,7 +1609,7 @@ async function handleModalForm(form, decision) {
       closeModal(); toast('Η πρόσβαση ενημερώθηκε.', 'success'); await refreshApp();
     }
     if (kind === 'device-account') { await saveDeviceAccount(form); return; }
-  } catch (error) { if (await recoverDatasetChanged(error)) return; if (!state.browserGate && !handleBrowserGate(error)) modalError(error); }
+  } catch (error) { if (await recoverDatasetChanged(error)) return; if (!state.browserGate && !handleBrowserGate(error)) modalError(error, kind); }
 }
 async function handleSettings(form) {
   const f = form.elements;

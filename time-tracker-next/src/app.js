@@ -917,7 +917,6 @@ function renderSettings() {
     '<div class="settings-columns"><section class="card"><div class="card-heading"><h2>Χρόνος εργασίας</h2></div><form id="settings-form"><div class="form-grid">' +
     field('Ημερήσιο όριο διαλείμματος · λεπτά', 'break_limit_minutes', settings.break_limit_minutes, 'number', 'min="0" max="1440" required') +
     field('Ημερήσιος στόχος παρουσίας · ώρες', 'shift_target_hours', Number(settings.shift_target_minutes ?? 480) / 60, 'number', 'min="0.25" max="24" step="0.25" required') +
-    selectField('Προεπιλογή βαρδιών ανά ημέρα', 'default_max_daily_shifts', option('1', '1 βάρδια', settings.default_max_daily_shifts) + option('2', '2 βάρδιες', settings.default_max_daily_shifts)) +
     field('Αδράνεια διαχείρισης · λεπτά', 'idle_timeout_minutes', settings.idle_timeout_minutes || 10, 'number', 'min="1" max="240" required') +
     '<div class="full">' + banner('Τα διαλείμματα περιλαμβάνονται στις ώρες παρουσίας. Το όριο διαλείμματος αφορά το ημερήσιο σύνολο. Οι ώρες εμφανίζονται πάντα σε ώρα Ελλάδας.') + '</div></div><button class="button primary" type="submit" data-submit>Αποθήκευση ρυθμίσεων</button><div class="form-error" role="alert"></div></form></section>' +
     '<div class="settings-account-stack"><section class="card"><div class="card-heading"><h2>Λογαριασμοί με email</h2>' + button('Προσθήκη', 'edit-member', '', 'small primary') + '</div><p class="muted">Προσωπικοί λογαριασμοί διαχείρισης και προβολής αναφορών.</p>' +
@@ -1261,7 +1260,7 @@ function openEmployee(id) {
     field('Έναρξη πρώτου ωραρίου', 'shift1_start', e.shift1_start?.slice(0, 5) || '', 'time') +
     field('Έναρξη δεύτερου ωραρίου', 'shift2_start', e.shift2_start?.slice(0, 5) || '', 'time') +
     field('Ανοχή καθυστέρησης · λεπτά', 'lateness_tolerance_minutes', e.lateness_tolerance_minutes || 0, 'number', 'min="0" max="240" required') +
-    selectField('Μέγιστες βάρδιες ανά ημέρα', 'max_daily_shifts', option('1', '1 βάρδια', e.max_daily_shifts ?? state.context.settings.default_max_daily_shifts) + option('2', '2 βάρδιες', e.max_daily_shifts ?? state.context.settings.default_max_daily_shifts)) + '</div>';
+    selectField('Μέγιστες βάρδιες ανά ημέρα', 'max_daily_shifts', option('', 'Επίλεξε βάρδιες', e.max_daily_shifts ?? '') + option('1', '1 βάρδια', e.max_daily_shifts ?? '') + option('2', '2 βάρδιες', e.max_daily_shifts ?? ''), 'required') + '</div>';
   openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Τα ωράρια χρησιμοποιούνται για τον υπολογισμό καθυστέρησης.', body, submitButton('Αποθήκευση'), 'employee');
 }
 function openVoid(ids) {
@@ -1577,9 +1576,11 @@ async function handleModalForm(form, decision) {
       closeModal(); toast(payload.decision === 'approve' ? 'Η διόρθωση εγκρίθηκε.' : 'Η διόρθωση απορρίφθηκε.', 'success'); await refreshApp(); return;
     }
     if (kind === 'employee') {
+      const maxDailyShifts = Number(f.max_daily_shifts.value);
+      if (![1, 2].includes(maxDailyShifts)) throw new Error('Επίλεξε 1 ή 2 βάρδιες ανά ημέρα για τον εργαζόμενο.');
       const payload = {
         name: f.name.value.trim(), department: f.department.value.trim(), color: f.color.value,
-        sort_order: Number(f.sort_order.value), max_daily_shifts: Number(f.max_daily_shifts.value),
+        sort_order: Number(f.sort_order.value), max_daily_shifts: maxDailyShifts,
         shift1_start: f.shift1_start.value ? normalizeTime(f.shift1_start.value) : null, shift2_start: f.shift2_start.value ? normalizeTime(f.shift2_start.value) : null,
         lateness_tolerance_minutes: Number(f.lateness_tolerance_minutes.value)
       };
@@ -1616,7 +1617,7 @@ async function handleSettings(form) {
   try {
     await command('settings_save', {
       break_limit_minutes: Number(f.break_limit_minutes.value), shift_target_minutes: Math.round(Number(f.shift_target_hours.value) * 60),
-      default_max_daily_shifts: Number(f.default_max_daily_shifts.value), idle_timeout_minutes: Number(f.idle_timeout_minutes.value)
+      idle_timeout_minutes: Number(f.idle_timeout_minutes.value)
     });
     toast('Οι ρυθμίσεις αποθηκεύτηκαν.', 'success'); await refreshApp();
   } catch (error) { toast(issueMessages(error), 'error'); }

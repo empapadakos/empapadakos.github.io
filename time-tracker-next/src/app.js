@@ -22,9 +22,9 @@ const app = document.getElementById('app');
 const modal = document.getElementById('modal');
 const state = {
   context: null, view: 'record', overview: null, selectedId: '', employeeData: null,
-  historyId: '', historyData: null, historyFrom: '', historyTo: '', historyStatus: '', historyType: '',
+  historyId: '', historyDataset: 'current', historyData: null, historyFrom: '', historyTo: '', historyStatus: '', historyType: '',
   requests: null, requestStatus: 'pending', requestEmployee: '',
-  statsId: '', month: '', statsMode: 'effective', monthData: null, stats: null,
+  statsId: '', statsDataset: 'current', month: '', statsMode: 'effective', monthData: null, stats: null,
   adminData: null, audit: [], auditCursor: null, showArchived: false,
   search: '', department: '', busy: false, loadToken: 0, personToken: 0, connected: true,
   serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false,
@@ -42,11 +42,30 @@ function isAdmin() { return state.context?.role === 'admin'; }
 function isOperator() { return state.context?.role === 'operator'; }
 function isOwner() { return isAdmin() && state.context?.is_owner === true; }
 function canRecord() { return ['admin', 'operator'].includes(state.context?.role); }
+function archiveAvailable() { return ['admin', 'reviewer'].includes(state.context?.role) && state.context?.history_archive?.available === true; }
+function viewDataset(view = state.view) {
+  const selected = view === 'history' ? state.historyDataset : (view === 'stats' ? state.statsDataset : 'current');
+  return archiveAvailable() && selected === 'archive' ? 'archive' : 'current';
+}
+function dataDataset(data) { return data?.dataset === 'archive' || data?.read_only === true ? 'archive' : 'current'; }
+function isArchiveView(view = state.view) {
+  const data = view === 'history' ? state.historyData : (view === 'stats' ? state.monthData : null);
+  return viewDataset(view) === 'archive' || dataDataset(data) === 'archive';
+}
+function datasetField(view) {
+  return archiveAvailable() ? selectField('Καταγραφές', view + '_dataset', option('current', 'Νέες καταγραφές', viewDataset(view)) + option('archive', 'Παλιό ιστορικό (μόνο προβολή)', viewDataset(view))) : '';
+}
+function archiveNotice() { return banner('Παλιό ιστορικό · μόνο προβολή. Οι νέες καταγραφές και τα σύνολά τους εμφανίζονται χωριστά.'); }
 function now() { return new Date(Date.now() + state.serverOffset); }
 function today() { return dateKey(now()); }
 function employee(id) { return state.context?.employees?.find(function(e) { return String(e.id) === String(id); }); }
 function activeEmployees() { return (state.context?.employees || []).filter(function(e) { return !e.archived; }); }
 function reconcileSelections() {
+  if (!archiveAvailable()) {
+    if (state.historyDataset !== 'current') state.historyData = null;
+    if (state.statsDataset !== 'current') { state.monthData = null; state.stats = null; }
+    state.historyDataset = 'current'; state.statsDataset = 'current';
+  }
   const rows = state.context?.employees || [];
   const first = rows.find(function(e) { return !e.archived; }) || rows[0];
   if (!rows.some(function(e) { return String(e.id) === String(state.historyId); })) { state.historyId = first?.id || ''; state.historyData = null; }
@@ -171,10 +190,18 @@ function renderUncertain() {
       '<div class="actions">' + button('Έλεγχος αποθήκευσης', 'retry-command', 'data-mutate', 'small') + '</div>') : '';
   box.classList.toggle('hidden', !state.pendingCommand);
 }
+const ATTENDANCE_ACTIONS = new Set(['record', 'correction', 'review', 'event_edit', 'event_void', 'admin_day_save', 'note_save', 'note_delete']);
+function attendancePayload(action, payload) {
+  const epoch = state.context?.attendance_epoch ?? state.context?.settings?.attendance_epoch;
+  // Capture the dataset when a new command is created. A retry must retain
+  // its original payload and must never be relabelled with a newer epoch.
+  return ATTENDANCE_ACTIONS.has(action) && epoch !== undefined && epoch !== null
+    ? { ...payload, attendance_epoch: epoch } : payload;
+}
 async function command(action, payload, retry = false) {
   if (state.busy) throw new Error('Περίμενε να ολοκληρωθεί η προηγούμενη ενέργεια.');
   if (state.pendingCommand && !retry) throw new Error('Έλεγξε πρώτα την τελευταία αποθήκευση από το μήνυμα στην κορυφή.');
-  const pending = retry ? state.pendingCommand : { action, payload, id: crypto.randomUUID(), email: state.context?.email };
+  const pending = retry ? state.pendingCommand : { action, payload: attendancePayload(action, payload), id: crypto.randomUUID(), email: state.context?.email };
   if (!pending) return null;
   savePending(pending); setBusy(true);
   try {
@@ -186,6 +213,18 @@ async function command(action, payload, retry = false) {
     handleBrowserGate(error);
     throw error;
   } finally { setBusy(false); renderUncertain(); }
+}
+async function recoverDatasetChanged(error) {
+  if (error?.uncertain || (error?.details?.code || error?.code) !== 'DATASET_CHANGED') return false;
+  savePending(null);
+  closeModal();
+  state.employeeData = null; state.historyData = null; state.monthData = null; state.stats = null;
+  state.overview = null; state.requests = null;
+  const counter = document.getElementById('request-counter'); if (counter) counter.textContent = '—';
+  state.adminDay = null; state.adminDayLoadToken++;
+  if (state.context) await refreshApp();
+  toast('Το παλιό αίτημα δεν εκτελέστηκε, επειδή το ιστορικό ενημερώθηκε. Επίλεξε ξανά την ενέργεια που θέλεις.', 'error');
+  return true;
 }
 function issueMessages(error) {
   const details = error?.details || {};
@@ -431,18 +470,18 @@ async function loadOverview() {
 async function loadView(view, silent = false) {
   if (!state.context) return;
   const token = ++state.loadToken; const main = document.getElementById('main');
-  const selection = { selectedId: state.selectedId, personToken: state.personToken, historyId: state.historyId, statsId: state.statsId, month: state.month, requestStatus: state.requestStatus, requestEmployee: state.requestEmployee };
+  const selection = { selectedId: state.selectedId, personToken: state.personToken, historyId: state.historyId, historyDataset: viewDataset('history'), statsId: state.statsId, statsDataset: viewDataset('stats'), month: state.month, requestStatus: state.requestStatus, requestEmployee: state.requestEmployee };
   function isCurrent() {
     if (!state.context || token !== state.loadToken || state.view !== view) return false;
     if (view === 'record') return selection.selectedId === state.selectedId && selection.personToken === state.personToken;
-    if (view === 'history') return selection.historyId === state.historyId;
-    if (view === 'stats') return selection.statsId === state.statsId && selection.month === state.month;
+    if (view === 'history') return selection.historyId === state.historyId && selection.historyDataset === viewDataset('history');
+    if (view === 'stats') return selection.statsId === state.statsId && selection.month === state.month && selection.statsDataset === viewDataset('stats');
     if (view === 'requests') return selection.requestStatus === state.requestStatus && selection.requestEmployee === state.requestEmployee;
     return true;
   }
   if (!silent) main.innerHTML = loading();
-  if (view === 'history' && String(state.historyData?.employee?.id || '') !== String(selection.historyId)) state.historyData = null;
-  if (view === 'stats' && (String(state.monthData?.employee?.id || '') !== String(selection.statsId) || state.monthData?.month !== selection.month)) state.monthData = null;
+  if (view === 'history' && (String(state.historyData?.employee?.id || '') !== String(selection.historyId) || dataDataset(state.historyData) !== selection.historyDataset)) state.historyData = null;
+  if (view === 'stats' && (String(state.monthData?.employee?.id || '') !== String(selection.statsId) || state.monthData?.month !== selection.month || dataDataset(state.monthData) !== selection.statsDataset)) { state.monthData = null; state.stats = null; state.nextScheduledRefresh = 0; }
   try {
     const updates = {}; let serverTime = null;
     if (view === 'record' || view === 'overview') {
@@ -450,11 +489,11 @@ async function loadView(view, silent = false) {
       updates.overview = results[0]; serverTime = results[0].server_now;
       if (results[1]) { updates.employeeData = results[1]; serverTime = results[1].server_now || serverTime; }
     } else if (view === 'history' && selection.historyId) {
-      updates.historyData = await api.read('employee', { employee_id: selection.historyId }); serverTime = updates.historyData.server_now;
+      updates.historyData = await api.read('employee', { employee_id: selection.historyId, ...(selection.historyDataset === 'archive' ? { dataset: 'archive' } : {}) }); serverTime = updates.historyData.server_now;
     } else if (view === 'requests') {
       updates.requests = await api.read('requests', { status: selection.requestStatus || undefined, employee_id: selection.requestEmployee || undefined }); serverTime = updates.requests.server_now;
     } else if (view === 'stats' && selection.statsId) {
-      updates.monthData = await api.read('month', { employee_id: selection.statsId, month: selection.month }); serverTime = updates.monthData.server_now;
+      updates.monthData = await api.read('month', { employee_id: selection.statsId, month: selection.month, ...(selection.statsDataset === 'archive' ? { dataset: 'archive' } : {}) }); serverTime = updates.monthData.server_now;
     } else if (view === 'settings') {
       const results = await Promise.all([api.read('admin', {}), isOwner() ? api.listBrowsers().catch(function(error) { return { devices: [], error: error.message || 'Δεν φορτώθηκαν οι εγκρίσεις browser.' }; }) : Promise.resolve(null)]);
       updates.adminData = results[0]; updates.browserData = results[1]; serverTime = updates.adminData.server_now || updates.browserData?.server_now;
@@ -462,6 +501,7 @@ async function loadView(view, silent = false) {
       const data = await api.read('audit', { limit: 100 }); updates.audit = data.rows || []; updates.auditCursor = data.next_cursor; serverTime = data.server_now;
     }
     if (!isCurrent()) return;
+    if ((updates.historyData && dataDataset(updates.historyData) !== selection.historyDataset) || (updates.monthData && dataDataset(updates.monthData) !== selection.statsDataset)) throw new Error('Δεν φορτώθηκε το επιλεγμένο ιστορικό. Δοκίμασε ανανέωση.');
     Object.assign(state, updates); setServerTime(serverTime);
     if (updates.overview) { const count = document.getElementById('request-counter'); if (count) count.textContent = String(updates.overview.pending_count || 0); }
     renderCurrentView(); setConnection(true);
@@ -593,19 +633,21 @@ function filteredHistory() {
 }
 function renderHistory() {
   if (!state.historyId) return heading('Καταγραφές', 'Το ιστορικό κινήσεων κάθε εργαζομένου.') + '<div class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</div>';
+  const readOnly = isArchiveView('history');
+  const canEdit = isAdmin() && !readOnly;
   const rows = filteredHistory();
-  const filters = '<div class="filter-row">' + selectField('Εργαζόμενος', 'history_employee', employeeOptions(state.historyId)) +
+  const filters = '<div class="filter-row">' + datasetField('history') + selectField('Εργαζόμενος', 'history_employee', employeeOptions(state.historyId)) +
     field('Από', 'history_from', state.historyFrom, 'date') + field('Έως', 'history_to', state.historyTo, 'date') +
     selectField('Κατάσταση', 'history_status', option('', 'Όλες', state.historyStatus) + Object.entries(STATUS).map(function(p) { return option(p[0], p[1], state.historyStatus); }).join('')) +
     selectField('Ενέργεια', 'history_type', option('', 'Όλες', state.historyType) + Object.entries(ACTIONS).map(function(p) { return option(p[0], p[1], state.historyType); }).join('')) + '</div>';
-  return heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
-    '<section class="card">' + filters + '<div id="bulk-bar" class="bulk-bar hidden"><span id="bulk-label"></span>' + button('Ακύρωση επιλεγμένων', 'void-selected', 'data-mutate', 'danger small') + '</div>' +
+  return heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() && !readOnly ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
+    '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canEdit ? '<div id="bulk-bar" class="bulk-bar hidden"><span id="bulk-label"></span>' + button('Ακύρωση επιλεγμένων', 'void-selected', 'data-mutate', 'danger small') + '</div>' : '') +
     (state.historyData?.history_limited ? '<p class="field-help">Στο τερματικό εμφανίζονται έως 200 πρόσφατες κινήσεις. Το πλήρες ιστορικό είναι διαθέσιμο στη διαχείριση.</p>' : '') +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr>' + (isAdmin() ? '<th><input type="checkbox" id="select-all-events" aria-label="Επιλογή όλων"></th>' : '') + '<th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (isAdmin() ? '<th></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
+    (rows.length ? '<div class="table-wrap"><table><thead><tr>' + (canEdit ? '<th><input type="checkbox" id="select-all-events" aria-label="Επιλογή όλων"></th>' : '') + '<th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
       const editable = ['approved', 'pending'].includes(ev.status);
-      return '<tr>' + (isAdmin() ? '<td>' + (editable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" aria-label="Επιλογή κίνησης">' : '') + '</td>' : '') +
-        '<td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '') + '</td>' +
-        (isAdmin() ? '<td>' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + '</td>' : '') + '</tr>';
+      return '<tr>' + (canEdit ? '<td>' + (editable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" aria-label="Επιλογή κίνησης">' : '') + '</td>' : '') +
+        '<td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'history_cleanup' ? '<small class="shift-line">Εκτιμώμενη παλιά ώρα</small>' : (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '')) + '</td>' +
+        (canEdit ? '<td>' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + '</td>' : '') + '</tr>';
     }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρώσεις διατηρούνται στο ιστορικό.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
 }
 function renderRequests() {
@@ -619,10 +661,12 @@ function renderRequests() {
     }).join('') + '</tbody></table></div>' : empty('Η λίστα είναι καθαρή', 'Δεν υπάρχουν αιτήματα με τα επιλεγμένα φίλτρα.')) + '</section>';
 }
 function timeCell(iso, id, employeeId, context = {}) {
-  const text = esc(displayTime(iso));
-  if (!isAdmin()) return '<span class="mono">' + text + '</span>';
+  const estimated = Boolean(iso && id && allKnownEvents().some(function(e) { return String(e.id) === String(id) && e.source === 'history_cleanup'; }));
+  const title = estimated ? ' title="Εκτιμώμενη παλιά ώρα"' : '';
+  const text = esc(displayTime(iso)) + (estimated ? '<sup aria-label="Εκτιμώμενη παλιά ώρα">*</sup>' : '');
+  if (!isAdmin() || isArchiveView('stats')) return '<span class="mono"' + title + '>' + text + '</span>';
   const day = iso ? dateKey(iso) : context.date;
-  return '<button type="button" class="time-button mono' + (!iso ? ' empty-time' : '') + '" data-action="admin-day" data-id="' + esc(id || '') + '" data-employee="' + esc(employeeId) + '" data-date="' + esc(day || today()) + '" data-type="' + esc(context.type || '') + '" data-shift="' + esc(context.shift_ref || '') + '" data-break="' + esc(context.break_ref || '') + '"' + (iso ? ' data-time="' + esc(iso) + '"' : '') + '>' + (iso ? text : '+ ' + esc(ACTIONS[context.type] || 'Ώρα')) + '</button>';
+  return '<button type="button" class="time-button mono' + (!iso ? ' empty-time' : '') + '"' + title + ' data-action="admin-day" data-id="' + esc(id || '') + '" data-employee="' + esc(employeeId) + '" data-date="' + esc(day || today()) + '" data-type="' + esc(context.type || '') + '" data-shift="' + esc(context.shift_ref || '') + '" data-break="' + esc(context.break_ref || '') + '"' + (iso ? ' data-time="' + esc(iso) + '"' : '') + '>' + (iso ? text : '+ ' + esc(ACTIONS[context.type] || 'Ώρα')) + '</button>';
 }
 
 function newAdminSlot(type, id = crypto.randomUUID(), event = null, date = state.adminDay?.date || today(), options = {}) {
@@ -707,8 +751,8 @@ function adminSlotHtml(slot, group, br = null) {
   const prefix = 'admin_' + slot.key;
   const label = ACTIONS[slot.type];
   const saved = slot.original;
-  const marker = saved?.status === 'draft' ? '<span class="badge">Πρόχειρη · αναμονή προϋποθέσεων</span>' : (saved && isScheduledEvent(saved) ? '<span class="badge planned">Ορισμένη ώρα</span>' : (saved?.source === 'admin' ? '<span class="badge">Από διαχειριστή</span>' : ''));
-  if (slot.readonly) return '<section class="admin-slot anchor"><div class="admin-slot-title"><strong>' + esc(label) + '</strong><span class="badge">Άλλη ημέρα</span></div><p class="mono">' + esc(displayDate(saved.event_at)) + ' · ' + esc(displayTime(saved.event_at, true)) + '</p><small>Η αρχική κίνηση διατηρείται. Άλλαξέ την από την αντίστοιχη ημέρα.</small></section>';
+  const marker = saved?.source === 'history_cleanup' ? '<span class="badge amber">Εκτιμώμενη παλιά ώρα</span>' : (saved?.status === 'draft' ? '<span class="badge">Πρόχειρη · αναμονή προϋποθέσεων</span>' : (saved && isScheduledEvent(saved) ? '<span class="badge planned">Ορισμένη ώρα</span>' : (saved?.source === 'admin' ? '<span class="badge">Από διαχειριστή</span>' : '')));
+  if (slot.readonly) return '<section class="admin-slot anchor"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker + '<span class="badge">Άλλη ημέρα</span></div><p class="mono">' + esc(displayDate(saved.event_at)) + ' · ' + esc(displayTime(saved.event_at, true)) + '</p><small>Η αρχική κίνηση διατηρείται. Άλλαξέ την από την αντίστοιχη ημέρα.</small></section>';
   return '<section class="admin-slot' + (slot.remove ? ' removed' : '') + '" data-admin-slot="' + esc(slot.key) + '"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker +
     (saved ? button(slot.remove ? 'Επαναφορά' : 'Ακύρωση', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', 'text small') : '') + '</div>' +
     (slot.remove ? '<p class="muted">Θα ακυρωθεί με την αποθήκευση. Το ιστορικό διατηρείται.</p>' : '<div class="admin-time-fields">' +
@@ -742,12 +786,12 @@ function renderAdminDayEditor() {
   openModal('Ώρες ημέρας', personName(model.employeeId) + ' · ' + dateDisplay(model.date), body, submitButton('Αποθήκευση ωρών'), 'admin-day');
 }
 async function openAdminDay(employeeId, date, preferred = {}) {
-  if (!isAdmin() || !employeeId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
+  if (!isAdmin() || isArchiveView() || !employeeId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
   const token = ++state.adminDayLoadToken;
   const view = state.view, selected = view === 'stats' ? state.statsId : (view === 'history' ? state.historyId : null);
   try {
     const data = await api.read('admin_day', { employee_id: employeeId, date });
-    if (token !== state.adminDayLoadToken || !isAdmin() || state.view !== view || (view === 'stats' && state.statsId !== selected) || (view === 'history' && state.historyId !== selected)) return;
+    if (token !== state.adminDayLoadToken || !isAdmin() || isArchiveView() || state.view !== view || (view === 'stats' && state.statsId !== selected) || (view === 'history' && state.historyId !== selected)) return;
     setServerTime(data.server_now);
     state.adminDay = buildAdminDayModel({ ...data, date, employee: data.employee || employee(employeeId) }, preferred);
     const model = state.adminDay;
@@ -787,6 +831,8 @@ function adminDayEntriesFromForm(form) {
 }
 function renderStats() {
   const data = state.monthData;
+  const readOnly = isArchiveView('stats');
+  const canEdit = isAdmin() && !readOnly;
   if (!state.statsId) return heading('Παρουσιολόγιο', 'Ώρες παρουσίας, διαλείμματα και ημερήσιες σημειώσεις.') + '<section class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</section>';
   state.stats = data ? monthlyStats(data.events || [], {
     month: state.month, employee: data.employee, notes: data.notes || [], settings: data.settings || state.context.settings,
@@ -798,14 +844,16 @@ function renderStats() {
   const previewDays = new Map((projected?.days || []).map(function(day) { return [day.date, day]; }));
   const rawEvents = data?.events || [];
   const rawById = new Map(rawEvents.map(function(e) { return [String(e.id), e]; }));
-  const due = rawEvents.filter(isScheduledEvent).map(function(e) { return Date.parse(e.event_at); });
+  const due = readOnly ? [] : rawEvents.filter(isScheduledEvent).map(function(e) { return Date.parse(e.event_at); });
   state.nextScheduledRefresh = due.length ? Math.min(...due) : 0;
   const totals = stats?.totals || {};
   return heading('Παρουσιολόγιο', 'Οι ώρες περιλαμβάνουν τα διαλείμματα. Οι ανοιχτές βάρδιες εμφανίζονται χωριστά.', button('Εξαγωγή CSV', 'export-stats', stats ? '' : 'disabled')) +
-    '<section class="card"><div class="filter-row">' + selectField('Εργαζόμενος', 'stats_employee', employeeOptions(state.statsId)) +
+    '<section class="card"><div class="filter-row">' + datasetField('stats') + selectField('Εργαζόμενος', 'stats_employee', employeeOptions(state.statsId)) +
     field('Μήνας', 'stats_month', state.month, 'month', 'required') + selectField('Υπολογισμός', 'stats_mode', option('effective', 'Μαζί με τις εκκρεμείς διορθώσεις', state.statsMode) + option('approved', 'Μόνο εγκεκριμένες καταγραφές', state.statsMode)) + '</div>' +
+    (readOnly ? archiveNotice() : '') +
     (stats?.has_pending && state.statsMode === 'effective' ? banner('Τα σύνολα περιλαμβάνουν εκκρεμείς διορθώσεις και παραμένουν προσωρινά μέχρι να ελεγχθούν.', 'warning') : '') +
     (projected?.has_scheduled ? banner('Οι ορισμένες μελλοντικές ώρες εμφανίζονται με μπλε ένδειξη. Θα ισχύσουν όταν φτάσει η ώρα τους και δεν προστίθενται πρόωρα στα σημερινά σύνολα.') : '') +
+    (rawEvents.some(function(e) { return e.source === 'history_cleanup'; }) ? '<p class="field-help">* Εκτιμώμενη παλιά ώρα που συμπληρώθηκε κατά την τακτοποίηση του ιστορικού.</p>' : '') +
     (stats?.issues?.length ? banner('Υπάρχουν κινήσεις που χρειάζονται έλεγχο. Οι ακολουθίες που δεν ολοκληρώνονται σωστά δεν υπολογίζονται ως πλήρης παρουσία.', 'warning') : '') +
     '<div class="metric-grid">' + metric('Ώρες παρουσίας', formatMinutes(totals.gross_minutes || 0), (totals.worked_days || 0) + ' ημέρες με ολοκληρωμένη παρουσία') +
     metric('Διαλείμματα', formatMinutes(totals.break_minutes || 0), (totals.break_count || 0) + ' διαλείμματα · δεν αφαιρούνται') +
@@ -817,17 +865,17 @@ function renderStats() {
       const drafts = rawEvents.filter(function(e) { return e.status === 'draft' && (e.admin_day || dateKey(e.event_at)) === day.date; });
       const planned = rawEvents.some(function(e) { return isScheduledEvent(e) && dateKey(e.event_at) === day.date; });
       const dayAttrs = 'data-employee="' + esc(state.statsId) + '" data-date="' + esc(day.date) + '"';
-      return '<tr class="' + (day.pending_count ? 'subtle-row' : '') + '"><td class="' + ([0, 6].includes(day.weekday) ? 'day-weekend' : '') + '"><strong class="mono">' + esc(dateDisplay(day.date)) + '</strong><span class="day-name">' + esc(shortDay(day.date)) + '</span>' + (isAdmin() ? button('Ώρες ημέρας', 'admin-day', dayAttrs, 'text small') : '') + '</td>' +
+      return '<tr class="' + (day.pending_count ? 'subtle-row' : '') + '"><td class="' + ([0, 6].includes(day.weekday) ? 'day-weekend' : '') + '"><strong class="mono">' + esc(dateDisplay(day.date)) + '</strong><span class="day-name">' + esc(shortDay(day.date)) + '</span>' + (canEdit ? button('Ώρες ημέρας', 'admin-day', dayAttrs, 'text small') : '') + '</td>' +
       '<td>' + (preview.shifts.length ? preview.shifts.map(function(shift, index) {
         return '<span class="shift-line">' + (index ? '<small>' + (index + 1) + 'η · </small>' : '') + timeCell(shift.start_at, shift.start_id, state.statsId, { date: day.date, type: 'clock_in', shift_ref: shift.start_id }) + ' → ' + timeCell(shift.end_at, shift.end_id, state.statsId, { date: day.date, type: 'clock_out', shift_ref: shift.start_id }) +
           (shift.pending ? ' <span class="badge amber">Προσωρινή</span>' : '') +
           ([shift.start_id, shift.end_id].some(function(id) { return isScheduledEvent(rawById.get(String(id))); }) ? ' <span class="badge planned">Ορισμένη ώρα</span>' : '') +
           (shift.carried_in ? '<small class="break-line">Από ' + esc(displayDate(shift.start_at)) + '</small>' : '') +
           (!shift.closed ? '<small class="break-line">Χωρίς έξοδο · ανοιχτή βάρδια</small>' : (shift.carried_out ? '<small class="break-line">Έως ' + esc(displayDate(shift.end_at)) + '</small>' : '')) +
-          (isAdmin() ? button('+ Διάλειμμα', 'admin-day', dayAttrs + ' data-add="break" data-shift="' + esc(shift.start_id || '') + '"', 'text small') : '') + '</span>';
+          (canEdit ? button('+ Διάλειμμα', 'admin-day', dayAttrs + ' data-add="break" data-shift="' + esc(shift.start_id || '') + '"', 'text small') : '') + '</span>';
       }).join('') : timeCell(null, null, state.statsId, { date: day.date, type: 'clock_in' }) + ' → ' + timeCell(null, null, state.statsId, { date: day.date, type: 'clock_out' })) +
-      (isAdmin() && preview.shifts.length ? button('+ Βάρδια', 'admin-day', dayAttrs + ' data-add="shift"', 'text small') : '') +
-      drafts.map(function(e) { return '<small class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' ' + esc(displayTime(e.event_at)) + (isAdmin() ? ' ' + button('Συμπλήρωση', 'admin-day', dayAttrs + ' data-id="' + esc(e.id) + '"', 'text small') : '') + '</small>'; }).join('') + '</td>' +
+      (canEdit && preview.shifts.length ? button('+ Βάρδια', 'admin-day', dayAttrs + ' data-add="shift"', 'text small') : '') +
+      drafts.map(function(e) { return '<small class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' ' + esc(displayTime(e.event_at)) + (canEdit ? ' ' + button('Συμπλήρωση', 'admin-day', dayAttrs + ' data-id="' + esc(e.id) + '"', 'text small') : '') + '</small>'; }).join('') + '</td>' +
       '<td>' + (preview.shifts.flatMap(function(shift) { return (shift.breaks || []).map(function(br) { return { ...br, shift_ref: shift.start_id }; }); }).map(function(br) {
         return '<span class="break-line">' + timeCell(br.start_at, br.start_id, state.statsId, { date: day.date, type: 'break_start', shift_ref: br.shift_ref, break_ref: br.start_id }) + ' → ' + timeCell(br.end_at, br.generated_end ? null : br.end_id, state.statsId, { date: day.date, type: 'break_end', shift_ref: br.shift_ref, break_ref: br.start_id }) +
           (br.generated_end ? ' <small>Κλείσιμο με την έξοδο</small>' : '') + (!br.closed ? ' · ανοιχτό' : ' · ' + esc(formatMinutes(br.minutes))) + '</span>';
@@ -838,9 +886,9 @@ function renderStats() {
         (day.has_open_shift ? '<small class="break-line">Ανοιχτή: ' + esc(formatMinutes(day.estimated_open_minutes)) + '</small>' : '') +
         (day.pending_count ? '<small class="break-line">' + day.pending_count + ' εκκρεμείς κινήσεις</small>' : '') + '</td>' +
       '<td class="mono">' + (day.late_minutes ? esc(formatMinutes(day.late_minutes)) : '—') + '</td><td>' +
-        (isAdmin() ? '<button type="button" class="note-chip" data-action="edit-note" data-date="' + esc(day.date) + '">' : '<span class="note-chip">') +
-        (day.note ? '<strong>' + esc(NOTES[day.note.kind] || 'Σημείωση') + '</strong>' + (day.note.text ? '<br>' + esc(day.note.text) : '') : (isAdmin() ? '+ Σημείωση' : '—')) +
-        (isAdmin() ? '</button>' : '</span>') + '</td></tr>';
+        (canEdit ? '<button type="button" class="note-chip" data-action="edit-note" data-date="' + esc(day.date) + '">' : '<span class="note-chip">') +
+        (day.note ? '<strong>' + esc(NOTES[day.note.kind] || 'Σημείωση') + '</strong>' + (day.note.text ? '<br>' + esc(day.note.text) : '') : (canEdit ? '+ Σημείωση' : '—')) +
+        (canEdit ? '</button>' : '</span>') + '</td></tr>';
     }).join('') + '</tbody></table></div>' : empty('Επίλεξε μήνα και εργαζόμενο', 'Τα σύνολα θα εμφανιστούν εδώ.')) +
     '</section><p class="footer-note">Ημερολογιακή κατανομή σε ώρα Ελλάδας · Οι νυχτερινές βάρδιες συνδέονται κανονικά μεταξύ ημερών.</p>';
 }
@@ -958,7 +1006,7 @@ async function saveBrowserDecision() {
   } finally { setBusy(false); }
 }
 function renderAudit() {
-  const labels = { record: 'Καταγραφή', correction: 'Αίτημα διόρθωσης', review: 'Έλεγχος διόρθωσης', event_edit: 'Αλλαγή ώρας', event_void: 'Ακύρωση κινήσεων', employee_save: 'Αλλαγή προσωπικού', employee_archive: 'Αρχειοθέτηση / επαναφορά', settings_save: 'Αλλαγή ρυθμίσεων', note_save: 'Σημείωση ημέρας', note_delete: 'Αφαίρεση σημείωσης', member_save: 'Αλλαγή πρόσβασης' };
+  const labels = { record: 'Καταγραφή', correction: 'Αίτημα διόρθωσης', review: 'Έλεγχος διόρθωσης', event_edit: 'Αλλαγή ώρας', event_void: 'Ακύρωση κινήσεων', history_cleanup: 'Τακτοποίηση παλιού ιστορικού', employee_save: 'Αλλαγή προσωπικού', employee_archive: 'Αρχειοθέτηση / επαναφορά', settings_save: 'Αλλαγή ρυθμίσεων', note_save: 'Σημείωση ημέρας', note_delete: 'Αφαίρεση σημείωσης', member_save: 'Αλλαγή πρόσβασης' };
   return heading('Ιστορικό αλλαγών', 'Οι καταγραφές διαχείρισης διατηρούνται για να είναι οι αλλαγές ελέγξιμες.') +
     '<section class="card">' + (state.audit.length ? '<div class="table-wrap"><table><thead><tr><th>Χρόνος</th><th>Λογαριασμός</th><th>Ενέργεια</th><th>Πληροφορίες</th></tr></thead><tbody>' +
       state.audit.map(function(row) {
@@ -1042,6 +1090,7 @@ async function recordAction(type) {
     else toast(result.message || (ACTIONS[type] + ' καταγράφηκε.'), 'success');
     await loadView('record', true);
   } catch (error) {
+    if (await recoverDatasetChanged(error)) return;
     if (state.browserGate || handleBrowserGate(error)) return;
     if (error.uncertain) { if (isOperator()) closeModal(); toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
     const suggestion = suggestionFrom(error, stateOf(state.employeeData), type);
@@ -1056,7 +1105,7 @@ function correctionEntryHtml(index, action = 'clock_in', iso = null, date = toda
     selectField('Ενέργεια', 'entry_' + index + '_type', actionOptions(action)) + dateTimeFields(iso, 'entry_' + index, {emptyTime: !iso, date}) + '</div></section>';
 }
 function openCorrection(id, suggestion = null) {
-  if (!canRecord() || !id) return;
+  if (!canRecord() || isArchiveView() || !id) return;
   if (suggestion?.issue && !suggestion.actions?.length) {
     openModal('Χρειάζεται έλεγχος ιστορικού', personName(id), banner(esc(suggestion.issue.message || 'Η υπάρχουσα καταγραφή χρειάζεται έλεγχο πριν προστεθεί άλλη ενέργεια.'), 'warning'), '');
     return;
@@ -1163,14 +1212,17 @@ async function refreshDuplicateCorrection(id, guidance, token, session, code = '
   }
   closeModal(); toast(duplicate ? 'Η κίνηση υπάρχει ήδη και υπολογίζεται. Μπορείς να συνεχίσεις.' : 'Η ακολουθία έχει ήδη συμπληρωθεί. Μπορείς να συνεχίσεις.', 'success'); await refreshApp();
 }
-function allKnownEvents() {
-  return [state.historyData?.events, state.employeeData?.events, state.monthData?.events, state.requests?.events].flatMap(function(v) { return v || []; });
+function allKnownEvents({ currentOnly = false } = {}) {
+  return [state.historyData, state.employeeData, state.monthData, state.requests].filter(function(data) { return !currentOnly || dataDataset(data) !== 'archive'; }).flatMap(function(data) { return data?.events || []; });
 }
 async function openEventEdit(id, employeeId) {
-  if (!isAdmin()) return;
-  let ev = allKnownEvents().find(function(e) { return String(e.id) === String(id); });
+  if (!isAdmin() || isArchiveView()) return;
+  const view = state.view, token = state.loadToken;
+  let ev = allKnownEvents({ currentOnly: true }).find(function(e) { return String(e.id) === String(id); });
   if (!ev && employeeId) {
-    const data = await api.read('employee', { employee_id: employeeId }); state.historyData = data;
+    const data = await api.read('employee', { employee_id: employeeId });
+    if (!isAdmin() || isArchiveView() || state.view !== view || state.loadToken !== token || dataDataset(data) === 'archive') return;
+    state.historyData = data;
     ev = data.events.find(function(e) { return String(e.id) === String(id); });
   }
   if (!ev) { toast('Η κίνηση δεν βρέθηκε. Ανανέωσε την οθόνη.', 'error'); return; }
@@ -1207,7 +1259,7 @@ function openEmployee(id) {
   openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Τα ωράρια χρησιμοποιούνται για τον υπολογισμό καθυστέρησης.', body, submitButton('Αποθήκευση'), 'employee');
 }
 function openVoid(ids) {
-  if (!isAdmin() || !ids.length) return;
+  if (!isAdmin() || isArchiveView() || !ids.length) return;
   if (ids.length > 100) { toast('Επίλεξε έως 100 κινήσεις για μία ακύρωση.', 'error'); return; }
   state.modalVoidIds = ids;
   openModal('Ακύρωση καταγραφών', ids.length + ' επιλεγμένες κινήσεις',
@@ -1215,7 +1267,7 @@ function openVoid(ids) {
     '<div class="field"><label for="f-reason">Αιτιολογία ακύρωσης</label><textarea id="f-reason" name="reason" maxlength="1000" required></textarea></div>', '<button class="button danger" type="submit" data-submit>Ακύρωση κινήσεων</button>', 'void');
 }
 function openNote(day) {
-  if (!isAdmin() || !state.statsId) return;
+  if (!isAdmin() || isArchiveView() || isArchiveView('stats') || !state.statsId) return;
   const note = state.stats?.days?.find(function(d) { return d.date === day; })?.note;
   state.modalNoteDate = day;
   openModal('Σημείωση ημέρας', personName(state.statsId) + ' · ' + dateDisplay(day),
@@ -1252,6 +1304,7 @@ function openDevice(id) {
     submitButton(member ? 'Αποθήκευση υπολογιστή' : 'Δημιουργία υπολογιστή'), 'device-account');
 }
 function updateBulkSelection() {
+  if (isArchiveView()) return;
   const checked = document.querySelectorAll('.event-check:checked').length;
   const box = document.getElementById('bulk-bar'); if (!box) return;
   box.classList.toggle('hidden', checked === 0);
@@ -1261,23 +1314,35 @@ function updateBulkSelection() {
 }
 function exportStats() {
   if (!state.stats || !state.monthData) return;
+  const archived = isArchiveView('stats');
+  const estimatedEvents = archived ? (state.monthData.events || []).filter(function(e) { return e.source === 'history_cleanup'; }) : [];
+  const estimatedIds = new Set(estimatedEvents.map(function(e) { return String(e.id); }));
+  const estimatedDates = new Set(estimatedEvents.map(function(e) { return dateKey(e.event_at); }));
   const rows = [['Εργαζόμενος', 'Ημερομηνία', 'Βάρδιες', 'Παρουσία λεπτά', 'Διαλείμματα λεπτά', 'Καθυστέρηση λεπτά', 'Εκκρεμείς κινήσεις', 'Ανοιχτή βάρδια', 'Κατηγορία σημείωσης', 'Σημείωση']];
+  if (archived) rows[0].push('Εκτιμώμενη παλιά ώρα');
   for (const day of state.stats.days) {
-    rows.push([state.monthData.employee.name, dateDisplay(day.date), day.shifts.map(function(s) { return displayTime(s.start_at) + '–' + displayTime(s.end_at); }).join(' / '),
-      Math.round(day.gross_minutes), Math.round(day.break_minutes), Math.round(day.late_minutes), day.pending_count, day.has_open_shift ? 'Ναι' : 'Όχι', day.note ? NOTES[day.note.kind] : '', day.note?.text || '']);
+    const row = [state.monthData.employee.name, dateDisplay(day.date), day.shifts.map(function(s) { return displayTime(s.start_at) + '–' + displayTime(s.end_at); }).join(' / '),
+      Math.round(day.gross_minutes), Math.round(day.break_minutes), Math.round(day.late_minutes), day.pending_count, day.has_open_shift ? 'Ναι' : 'Όχι', day.note ? NOTES[day.note.kind] : '', day.note?.text || ''];
+    if (archived) {
+      const estimated = estimatedDates.has(day.date) || day.shifts.some(function(shift) {
+        return [shift.start_id, shift.end_id, ...(shift.breaks || []).flatMap(function(br) { return [br.start_id, br.end_id]; })].some(function(id) { return id != null && estimatedIds.has(String(id)); });
+      });
+      row.push(estimated ? 'Ναι' : '');
+    }
+    rows.push(row);
   }
   const csv = '\ufeff' + rows.map(function(row) {
     return row.map(function(value) { let s = String(value ?? ''); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; }).join(';');
   }).join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-  const link = document.createElement('a'); link.href = url; link.download = 'parousies-' + state.month + '.csv'; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  const link = document.createElement('a'); link.href = url; link.download = 'parousies-' + state.month + (archived ? '-palio-istoriko' : '') + '.csv'; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 }
 async function logout(message = '') {
   if (state.busy) return;
   state.authMode = pageMode.admin ? 'admin' : 'device'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
   state.sessionLoadToken++; state.browserCheckToken++; state.browserCheckBusy = false; state.browserGate = null; state.browserData = null; state.browserPollAt = 0;
   closeModal(); state.loadToken++; state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null;
-  state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
+  state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.historyDataset = 'current'; state.statsDataset = 'current'; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
   try { await api.signOut(); } catch {}
   state.authMessage = message; state.authError = false; renderLogin();
 }
@@ -1319,9 +1384,9 @@ async function handleAction(action, node) {
   if (action === 'select-employee') { await selectEmployee(node.dataset.id); return; }
   if (action === 'select-person-from-overview') { await selectEmployee(node.dataset.id, true); return; }
   if (action === 'record-action') { await recordAction(node.dataset.type); return; }
-  if (action === 'person-history') { state.historyId = node.dataset.id; state.historyStatus = ''; await navigate('history'); return; }
+  if (action === 'person-history') { state.historyId = node.dataset.id; state.historyDataset = 'current'; state.historyStatus = ''; await navigate('history'); return; }
   if (action === 'related-history') {
-    state.historyId = state.modalEvent?.employee_id || state.historyId; state.historyFrom = ''; state.historyTo = ''; state.historyStatus = ''; state.historyType = '';
+    state.historyId = state.modalEvent?.employee_id || state.historyId; state.historyDataset = 'current'; state.historyFrom = ''; state.historyTo = ''; state.historyStatus = ''; state.historyType = '';
     closeModal(); await navigate('history'); return;
   }
   if (action === 'admin-day') {
@@ -1329,7 +1394,7 @@ async function handleAction(action, node) {
   }
   if (action === 'admin-day-reload') { const model = state.adminDay; if (model) await openAdminDay(model.employeeId, model.date); return; }
   if (action === 'admin-add-shift' || action === 'admin-add-break' || action === 'admin-remove-slot') {
-    if (!isAdmin() || !state.adminDay) return;
+    if (!isAdmin() || isArchiveView() || !state.adminDay) return;
     captureAdminDayFields();
     if (action === 'admin-remove-slot') { const slot = adminSlots().find(function(s) { return s.key === node.dataset.key; }); if (slot && slot.original && !slot.readonly) slot.remove = !slot.remove; }
     else {
@@ -1375,7 +1440,7 @@ async function handleAction(action, node) {
     if (!state.pendingCommand || state.busy) return;
     try {
       await command(null, null, true); closeModal(); toast('Η αποθήκευση επιβεβαιώθηκε.', 'success'); await refreshApp();
-    } catch (error) { if (error.uncertain) toast('Δεν έχει επιβεβαιωθεί ακόμη. Δοκίμασε όταν επανέλθει η σύνδεση.', 'error'); else { toast(issueMessages(error), 'error'); await refreshApp(); } }
+    } catch (error) { if (await recoverDatasetChanged(error)) return; if (error.uncertain) toast('Δεν έχει επιβεβαιωθεί ακόμη. Δοκίμασε όταν επανέλθει η σύνδεση.', 'error'); else { toast(issueMessages(error), 'error'); await refreshApp(); } }
     return;
   }
   if (action === 'more-audit' && state.auditCursor) {
@@ -1444,6 +1509,7 @@ async function handleModalForm(form, decision) {
   const kind = form.dataset.kind;
   const f = form.elements;
   try {
+    if (isArchiveView() && ['admin-day', 'correction', 'event-edit', 'review', 'void', 'note'].includes(kind)) throw new Error('Το παλιό ιστορικό είναι διαθέσιμο μόνο για προβολή.');
     if (kind === 'browser-decision') { await saveBrowserDecision(); return; }
     if (kind === 'admin-day') {
       if (!isAdmin() || !state.adminDay) throw new Error('Απαιτείται διαχειριστής.');
@@ -1537,7 +1603,7 @@ async function handleModalForm(form, decision) {
       closeModal(); toast('Η πρόσβαση ενημερώθηκε.', 'success'); await refreshApp();
     }
     if (kind === 'device-account') { await saveDeviceAccount(form); return; }
-  } catch (error) { if (!state.browserGate && !handleBrowserGate(error)) modalError(error); }
+  } catch (error) { if (await recoverDatasetChanged(error)) return; if (!state.browserGate && !handleBrowserGate(error)) modalError(error); }
 }
 async function handleSettings(form) {
   const f = form.elements;
@@ -1557,8 +1623,24 @@ async function handleChange(target) {
     state.department = target.value; const grid = document.getElementById('employee-grid'); if (grid) grid.innerHTML = employeeGrid(); colorAvatars(); return;
   }
   if (target.id === 'show-archived') { state.showArchived = target.checked; renderCurrentView(); return; }
-  if (target.id === 'select-all-events') { document.querySelectorAll('.event-check').forEach(function(el) { el.checked = target.checked; }); updateBulkSelection(); return; }
+  if (target.id === 'select-all-events') { if (isArchiveView()) return; document.querySelectorAll('.event-check').forEach(function(el) { el.checked = target.checked; }); updateBulkSelection(); return; }
   if (target.classList.contains('event-check')) { updateBulkSelection(); return; }
+  if (target.name === 'history_dataset' || target.name === 'stats_dataset') {
+    if (!archiveAvailable() || !['current', 'archive'].includes(target.value)) return;
+    const view = target.name === 'history_dataset' ? 'history' : 'stats';
+    if (state.view !== view) return;
+    closeModal(); state.adminDay = null; state.adminDayLoadToken++;
+    if (view === 'history') {
+      state.historyDataset = target.value; state.historyData = null;
+      state.historyFrom = target.value === 'archive' && state.context.history_archive.from ? dateKey(state.context.history_archive.from) : today().slice(0, 7) + '-01';
+      state.historyTo = target.value === 'archive' && state.context.history_archive.to ? dateKey(state.context.history_archive.to) : today();
+    } else {
+      state.statsDataset = target.value; state.monthData = null; state.stats = null; state.nextScheduledRefresh = 0;
+      const range = state.context.history_archive;
+      if (target.value === 'archive' && range.to && (!state.month || state.month > dateKey(range.to).slice(0, 7) || (range.from && state.month < dateKey(range.from).slice(0, 7)))) state.month = dateKey(range.to).slice(0, 7);
+    }
+    await loadView(view); return;
+  }
   if (target.name === 'history_employee') { state.historyId = target.value; await loadView('history'); return; }
   if (target.name === 'history_from') { state.historyFrom = target.value; renderCurrentView(); return; }
   if (target.name === 'history_to') { state.historyTo = target.value; renderCurrentView(); return; }

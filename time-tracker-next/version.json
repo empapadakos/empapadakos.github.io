@@ -1,7 +1,7 @@
 {
-  "version": "2.1.1",
+  "version": "2.2.0",
   "name": "Time Tracker v2",
-  "sourceCommit": "000cad6931bae80a393dcf63c825cbd217175e37",
+  "sourceCommit": "73bd4db06ce0579e9e8bb151e645b22469863f7a",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",
@@ -11,7 +11,9 @@
     "time_tracker_next_legacy_import",
     "time_tracker_next_browser_approval",
     "time_tracker_next_terminal_housekeeping",
-    "time_tracker_next_guided_corrections"
+    "time_tracker_next_guided_corrections",
+    "time_tracker_next_attendance_maintenance",
+    "time_tracker_next_historical_archive"
   ],
   "accountService": "ttn-manage-accounts",
   "terminalService": "ttn-terminal"

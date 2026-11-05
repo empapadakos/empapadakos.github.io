@@ -32,8 +32,130 @@ const state = {
   modalMember: null, modalDevice: null, modalBrowser: null, correctionGuidance: null, correctionToken: 0,
   browserGate: null, browserData: null, browserCheckBusy: false, browserCheckToken: 0, browserPollAt: 0, sessionLoadToken: 0,
   pendingBrowserRequest: '', openedBrowserRequest: '',
-  adminDay: null, adminDayLoadToken: 0, nextScheduledRefresh: 0
+  adminDay: null, adminDayLoadToken: 0, nextScheduledRefresh: 0, adminIdleEstablished: false, returningToShop: false, sessionReloadPending: false
 };
+
+
+const ADMIN_ACTIVITY_KEY = 'time-tracker-next.admin.activity.v1';
+const ADMIN_SESSION_KEY = 'time-tracker-next.admin.auth.v1';
+const ADMIN_IDLE_MESSAGE = 'Η συνεδρία έληξε λόγω αδράνειας. Συνδέσου ξανά για να συνεχίσεις.';
+let adminIdleMemory = null;
+let adminIdleStorageBlocked = false;
+function administrativeContext(context = state.context) { return pageMode.admin && ['admin', 'reviewer'].includes(context?.role); }
+function legacyAdministrativeContext(context = state.context) { return !pageMode.admin && ['admin', 'reviewer'].includes(context?.role); }
+function idleIdentity(context) { return String(context?.member_id || context?.email || '').toLowerCase(); }
+function idleTimeout(context) { return Math.min(240, Math.max(1, Number(context?.settings?.idle_timeout_minutes) || 10)) * 60000; }
+function readAdminIdle() {
+  let value;
+  try { value = sessionStorage.getItem(ADMIN_ACTIVITY_KEY); }
+  catch { return adminIdleMemory; }
+  if (value == null) return adminIdleStorageBlocked ? adminIdleMemory : null;
+  try {
+    const record = JSON.parse(value);
+    if (!record || typeof record.identity !== 'string' || !record.identity || !Number.isFinite(record.lastActivity) || record.lastActivity <= 0 || record.lastActivity > Date.now() + 30000 || !Number.isFinite(record.timeoutMs) || record.timeoutMs < 60000 || record.timeoutMs > 14400000) return null;
+    return record;
+  } catch { return null; }
+}
+function writeAdminIdle(record) {
+  adminIdleMemory = record;
+  try { const value = JSON.stringify(record); sessionStorage.setItem(ADMIN_ACTIVITY_KEY, value); adminIdleStorageBlocked = sessionStorage.getItem(ADMIN_ACTIVITY_KEY) !== value; }
+  catch { adminIdleStorageBlocked = true; }
+}
+function clearAdminIdle() {
+  adminIdleMemory = null;
+  try { sessionStorage.removeItem(ADMIN_ACTIVITY_KEY); adminIdleStorageBlocked = false; } catch { adminIdleStorageBlocked = true; }
+}
+function savedAdminSession() {
+  try { return Boolean(sessionStorage.getItem(ADMIN_SESSION_KEY)); } catch { return false; }
+}
+function discardSavedAdminSession() {
+  if (typeof api.discardStoredAdminSession === 'function') {
+    Promise.resolve(api.discardStoredAdminSession()).catch(function() {});
+  } else { try { sessionStorage.removeItem(ADMIN_SESSION_KEY); } catch {} }
+}
+function idleRemaining(record = readAdminIdle()) { return record ? Math.max(0, record.lastActivity + record.timeoutMs - Date.now()) : 0; }
+function idleClock(record = readAdminIdle()) {
+  const seconds = Math.ceil(idleRemaining(record) / 1000);
+  return String(Math.floor(seconds / 60)).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
+}
+function adminIdleBadge(extraClass = '') {
+  const record = readAdminIdle();
+  return '<span class="admin-idle-countdown' + (extraClass ? ' ' + extraClass : '') + (!record ? ' hidden' : '') + '" data-admin-idle role="timer" aria-live="off" title="Χρόνος μέχρι την αυτόματη αποσύνδεση διαχείρισης"><span>Αδράνεια</span> <time class="mono" data-admin-idle-time>' + idleClock(record) + '</time></span>';
+}
+function updateAdminIdleBadge() {
+  const record = readAdminIdle();
+  document.querySelectorAll('[data-admin-idle]').forEach(function(node) {
+    node.classList.toggle('hidden', !record);
+    node.classList.toggle('admin-idle-warning', Boolean(record && idleRemaining(record) <= 60000));
+    const clock = node.querySelector('[data-admin-idle-time]'); if (clock) clock.textContent = idleClock(record);
+  });
+}
+function requestSessionReload() {
+  if (state.sessionReloadPending) return;
+  state.sessionReloadPending = true; state.authBusy = true;
+  state.sessionLoadToken++; state.loadToken++; state.personToken++; state.adminDayLoadToken++;
+  state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null; state.overview = null; state.adminData = null;
+  clearPasswords(modal); modal.close(); app.innerHTML = loading();
+  window.location?.reload?.();
+}
+function expireAdminIdle() {
+  if (state.sessionReloadPending) return true;
+  if (pageMode.admin && state.authBusy && !state.context) return false;
+  if (legacyAdministrativeContext() && !state.busy && Date.now() - state.lastActivity >= idleTimeout(state.context)) {
+    if (!state.idleLogout) { state.idleLogout = true; Promise.resolve(logout(ADMIN_IDLE_MESSAGE)).finally(function() { state.idleLogout = false; }); }
+    return true;
+  }
+  let record = readAdminIdle();
+  if (administrativeContext() && !state.adminIdleEstablished && !record) {
+    writeAdminIdle({lastActivity: state.lastActivity, timeoutMs: idleTimeout(state.context), identity: idleIdentity(state.context)});
+    state.adminIdleEstablished = true; record = readAdminIdle();
+  }
+  if (administrativeContext() && record?.identity && record.identity !== idleIdentity(state.context)) { requestSessionReload(); return true; }
+  const missing = administrativeContext() && state.adminIdleEstablished && !record;
+  if (!missing && (!record || idleRemaining(record) > 0)) return false;
+  if (administrativeContext() && state.busy) { updateAdminIdleBadge(); return true; }
+  clearAdminIdle();
+  if (administrativeContext()) {
+    if (!state.idleLogout) {
+      state.idleLogout = true;
+      Promise.resolve(logout(ADMIN_IDLE_MESSAGE)).finally(function() { state.idleLogout = false; });
+    }
+  } else discardSavedAdminSession();
+  updateAdminIdleBadge(); return true;
+}
+function syncAdminIdle(context, fresh = false) {
+  const record = readAdminIdle();
+  if (administrativeContext(context)) {
+    if (!fresh && record?.identity && record.identity !== idleIdentity(context)) {
+      if (state.adminIdleEstablished || administrativeContext()) requestSessionReload();
+      else clearAdminIdle();
+      return false;
+    }
+    if (!fresh && state.adminIdleEstablished && !record) { requestSessionReload(); return false; }
+    if (!fresh && record && idleRemaining(record) <= 0) { clearAdminIdle(); return false; }
+    const next = !fresh && record && record.identity === idleIdentity(context) ? {...record, timeoutMs: idleTimeout(context)} : {lastActivity: Date.now(), timeoutMs: idleTimeout(context), identity: idleIdentity(context)};
+    writeAdminIdle(next); state.lastActivity = next.lastActivity; state.adminIdleEstablished = true;
+    return idleRemaining(next) > 0;
+  }
+  if (record) writeAdminIdle({...record, timeoutMs: idleTimeout(context)});
+  return true;
+}
+function recordAppActivity(event) {
+  const activeAdmin = administrativeContext() || legacyAdministrativeContext();
+  if (expireAdminIdle()) {
+    if (activeAdmin || state.sessionReloadPending) { event?.preventDefault?.(); event?.stopImmediatePropagation?.(); }
+    return;
+  }
+  if (legacyAdministrativeContext()) state.lastActivity = Date.now();
+  const record = readAdminIdle();
+  if (record) { const at = Date.now(); writeAdminIdle({...record, lastActivity: at}); state.lastActivity = at; updateAdminIdleBadge(); }
+}
+function freshAdminCallback() {
+  try {
+    const current = new URL(window.location?.href || pageMode.adminUrl); const hash = new URLSearchParams(current.hash.slice(1));
+    return Boolean((hash.get('access_token') || current.searchParams.get('access_token')) && (hash.get('refresh_token') || current.searchParams.get('refresh_token')));
+  } catch { return false; }
+}
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
@@ -419,7 +541,7 @@ function renderLogin() {
   const resend = !device && state.authResend;
   const signup = !device && !resend && state.signup;
   const title = resend ? 'Επιβεβαίωση email' : (signup ? 'Δημιουργία λογαριασμού' : (pageMode.admin ? 'Σύνδεση διαχείρισης' : 'Σύνδεση στην εφαρμογή'));
-  app.innerHTML = '<div class="login-page"><section class="login-story"><div class="brand"><span class="brand-mark">⏱</span><span>' + esc(APP_NAME) + '</span></div>' +
+  app.innerHTML = '<div class="login-page">' + adminIdleBadge('admin-idle-login') + '<section class="login-story"><div class="brand"><span class="brand-mark">⏱</span><span>' + esc(APP_NAME) + '</span></div>' +
     '<h1>Η ομάδα σου.<br>Κάθε στιγμή,<br>σε σωστή σειρά.</h1><p>Καταγραφές παρουσίας, ξεκάθαρες διορθώσεις και μια κοινή εικόνα για την καθημερινή εργασία.</p><footer>Ώρα Ελλάδας · Οι αλλαγές επιβεβαιώνονται πριν εμφανιστούν ως αποθηκευμένες.</footer></section>' +
     '<section class="login-form-wrap"><form id="auth-form" class="login-form"><div class="eyebrow">Καλώς ήρθες</div>' + (device ? '<div class="auth-tabs" role="group" aria-label="Τρόπος σύνδεσης"><a class="button" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a>' +
     button('Υπολογιστής καταγραφής', 'auth-mode', 'data-mode="device" aria-pressed="true"', 'active') + '</div>' : '') + '<h2>' + title + '</h2><p>' +
@@ -434,15 +556,17 @@ function renderLogin() {
     '<p class="login-help">' + (device ? 'Οι εργαζόμενοι επιλέγουν το όνομά τους και πατούν τις καταγραφές, χωρίς δικό τους email. Η σύνδεση διατηρείται σε αυτόν τον browser, χωρίς αποσύνδεση λόγω αδράνειας. Μπορεί να χρειαστεί νέα σύνδεση μετά από αποσύνδεση, αλλαγή πρόσβασης ή διαγραφή δεδομένων του browser.' : 'Η πρόσβαση δίνεται από τον διαχειριστή. Στο κοινό tablet χρησιμοποίησε λογαριασμό τερματικού, ώστε η διαχείριση να παραμένει προσωπική.') + '</p>' +
     (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'block') : '') + '</form></section></div>';
 }
-async function enterApp() {
+async function enterApp({freshAdmin = false} = {}) {
   const token = ++state.sessionLoadToken;
   const context = await api.context(); if (token !== state.sessionLoadToken) return;
   if (pageMode.admin && !['admin', 'reviewer'].includes(context.role)) {
     await api.signOut();
     throw new Error('Αυτός ο λογαριασμός δεν έχει πρόσβαση στη διαχείριση. Συνδέσου με το προσωπικό email διαχειριστή.');
   }
+  if (!syncAdminIdle(context, freshAdmin)) { if (state.sessionReloadPending) return; await api.signOut(); state.authMessage = ADMIN_IDLE_MESSAGE; renderLogin(); return; }
   state.browserGate = null; state.browserPollAt = 0;
-  state.context = context; setServerTime(context.server_now); state.lastActivity = Date.now();
+  state.context = context; setServerTime(context.server_now);
+  if (legacyAdministrativeContext(context)) state.lastActivity = Date.now();
   restorePending(); state.view = pageMode.admin ? 'overview' : (VIEWS.find(function(v) { return v[3].includes(context.role); })?.[0] || 'overview');
   if (state.pendingBrowserRequest && isOwner()) state.view = 'settings';
   state.month ||= today().slice(0, 7); state.historyFrom ||= today().slice(0, 7) + '-01'; state.historyTo ||= today();
@@ -455,7 +579,7 @@ function renderShell() {
   document.body.classList.toggle('employee-kiosk', isOperator());
   if (isOperator()) {
     app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ ' + esc(APP_NAME) + '</h1><nav class="kiosk-nav" aria-label="Κύρια πλοήγηση">' +
-      '<button class="kiosk-nav-button active" type="button" data-action="kiosk-home" aria-current="page">🏠 Κατάστημα</button><a class="kiosk-nav-button kiosk-admin-link" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a></nav></header>' +
+      adminIdleBadge() + '<button class="kiosk-nav-button active" type="button" data-action="kiosk-home" aria-current="page">🏠 Κατάστημα</button><a class="kiosk-nav-button kiosk-admin-link" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a></nav></header>' +
       '<div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" class="kiosk-main" tabindex="-1"></main></div>';
     renderUncertain(); return;
   }
@@ -466,14 +590,14 @@ function renderShell() {
   app.innerHTML = '<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">⏱</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + navigation + '</nav>' +
     '<div class="sidebar-footer"><div class="account-name">' + esc(ctx.display_name || ctx.username || ctx.email) + '</div><div class="account-role">' + esc(ROLES[ctx.role] || ctx.role) + (ctx.is_owner ? ' · Ιδιοκτήτης' : '') + '</div><button type="button" data-action="logout">Αποσύνδεση ↗</button></div></aside>' +
     '<div class="main-wrap"><header class="topbar"><button class="icon-button mobile-menu-toggle" type="button" data-action="toggle-menu" aria-label="Μενού" aria-expanded="false">☰</button><span class="header-title-mobile">' + esc(APP_NAME) + '</span><div class="breadcrumb">Χώρος εργασίας <span aria-hidden="true">/</span> <strong id="current-view-name">' + esc(VIEWS.find(function(v) { return v[0] === state.view; })?.[1] || '') + '</strong></div>' +
-    '<div class="header-actions">' + (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'small return-shop-button') : '') + '<span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
+    '<div class="header-actions">' + adminIdleBadge() + (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'small return-shop-button') : '') + '<span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
   renderUncertain(); tick();
 }
 async function loadOverview() {
   return api.read('overview', {});
 }
 async function loadView(view, silent = false) {
-  if (!state.context) return;
+  if (state.sessionReloadPending || !state.context) return;
   const token = ++state.loadToken; const main = document.getElementById('main');
   const selection = { selectedId: state.selectedId, personToken: state.personToken, historyId: state.historyId, historyDataset: viewDataset('history'), statsId: state.statsId, statsDataset: viewDataset('stats'), month: state.month, requestStatus: state.requestStatus, requestEmployee: state.requestEmployee };
   function isCurrent() {
@@ -541,7 +665,9 @@ async function refreshApp() {
       await logout('Ο λογαριασμός δεν έχει πλέον πρόσβαση στη διαχείριση.');
       return;
     }
+    if (!syncAdminIdle(context)) { if (state.sessionReloadPending) return; await logout(ADMIN_IDLE_MESSAGE); return; }
     state.context = context; setServerTime(context.server_now);
+    if (expireAdminIdle()) return;
     reconcileSelections();
     if (!VIEWS.some(function(v) { return v[0] === state.view && v[3].includes(context.role); })) state.view = VIEWS.find(function(v) { return v[3].includes(context.role); })[0];
     if (previousRole !== context.role) renderShell();
@@ -1343,23 +1469,26 @@ function exportStats() {
 }
 async function logout(message = '') {
   if (state.busy) return;
+  if (pageMode.admin) { clearAdminIdle(); state.adminIdleEstablished = false; }
   state.authMode = pageMode.admin ? 'admin' : 'device'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
   state.sessionLoadToken++; state.browserCheckToken++; state.browserCheckBusy = false; state.browserGate = null; state.browserData = null; state.browserPollAt = 0;
   closeModal(); state.loadToken++; state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null;
   state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.historyDataset = 'current'; state.statsDataset = 'current'; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
-  try { await api.signOut(); } catch {}
+  let signedOut;
+  try { signedOut = api.signOut(); } catch {}
   state.authMessage = message; state.authError = false; renderLogin();
+  try { await signedOut; } catch {}
 }
 async function returnToShop() {
-  if (!pageMode.admin || state.busy || state.authBusy) return;
+  if (!pageMode.admin || state.busy || state.authBusy || state.returningToShop) return;
   if (state.pendingCommand) { toast('Έλεγξε πρώτα την τελευταία αποθήκευση πριν επιστρέψεις στο κατάστημα.', 'error'); return; }
-  state.authBusy = true;
-  try {
-    await logout();
-    window.location.assign(pageMode.shopUrl);
-  } finally { state.authBusy = false; }
+  state.authBusy = true; state.returningToShop = true;
+  try { window.location.assign(pageMode.shopUrl); }
+  catch (error) { state.returningToShop = false; throw error; }
+  finally { state.authBusy = false; }
 }
 async function handleAction(action, node) {
+  if (state.sessionReloadPending || expireAdminIdle()) return;
   if (state.busy || state.authBusy) return;
   if (action === 'return-shop') { await returnToShop(); return; }
   if (action === 'auth-mode' || action === 'toggle-signup' || action === 'resend-confirmation') {
@@ -1478,7 +1607,7 @@ async function handleAuth(form) {
       }
     } else await api.signIn(payload);
     state.authMessage = ''; state.authError = false; state.authRetryRestore = false;
-    await enterApp();
+    await enterApp({freshAdmin: pageMode.admin});
   } catch (error) {
     if (handleBrowserGate(error)) return;
     state.authMessage = error.message || 'Η σύνδεση δεν ολοκληρώθηκε.'; state.authError = true; renderLogin();
@@ -1510,6 +1639,7 @@ async function saveDeviceAccount(form) {
   } finally { f.password.value = ''; setBusy(false); }
 }
 async function handleModalForm(form, decision) {
+  if (state.sessionReloadPending || expireAdminIdle()) return;
   const kind = form.dataset.kind;
   const f = form.elements;
   try {
@@ -1610,6 +1740,7 @@ async function handleModalForm(form, decision) {
   } catch (error) { if (await recoverDatasetChanged(error)) return; if (!state.browserGate && !handleBrowserGate(error)) modalError(error, kind); }
 }
 async function handleSettings(form) {
+  if (state.sessionReloadPending || expireAdminIdle()) return;
   const f = form.elements;
   try {
     await command('settings_save', {
@@ -1657,6 +1788,8 @@ async function handleChange(target) {
   if (target.name === 'stats_mode') { state.statsMode = target.value; renderCurrentView(); }
 }
 function tick() {
+  if (state.sessionReloadPending) return;
+  expireAdminIdle(); updateAdminIdleBadge();
   if (state.browserGate?.status === 'pending' && state.browserPollAt && Date.now() >= state.browserPollAt && !state.busy && !state.authBusy && !state.browserCheckBusy && !document.hidden) {
     state.browserPollAt = Date.now() + 15000; checkBrowserApproval();
   }
@@ -1671,12 +1804,11 @@ function tick() {
     state.nextScheduledRefresh = 0;
     loadView('stats', true).catch(function(error) { setConnection(false); toast(error.message, 'error'); });
   }
-  if (ctx && ['admin', 'reviewer'].includes(ctx.role) && !state.busy && !state.idleLogout && Date.now() - state.lastActivity > Number(ctx.settings?.idle_timeout_minutes || 10) * 60000) {
-    state.idleLogout = true;
-    logout('Η συνεδρία έληξε λόγω αδράνειας. Συνδέσου ξανά για να συνεχίσεις.').finally(function() { state.idleLogout = false; });
-  }
 }
 
+['click', 'pointerdown', 'keydown', 'touchstart', 'input', 'change'].forEach(function(type) {
+  document.addEventListener(type, recordAppActivity, {capture: true});
+});
 document.addEventListener('click', function(event) {
   if (event.target.closest?.('a.kiosk-admin-link') && state.busy) { event.preventDefault(); return; }
   const node = event.target.closest?.('button[data-action]');
@@ -1717,22 +1849,27 @@ document.addEventListener('paste', function(event) {
     if (input.dataset.dst) updateDstChoices(modal);
   } catch (error) { input.setCustomValidity?.(error.message); input.reportValidity?.(); }
 });
-['pointerdown', 'keydown', 'touchstart'].forEach(function(type) {
-  document.addEventListener(type, function() { state.lastActivity = Date.now(); }, { passive: true });
-});
 modal.addEventListener('cancel', function(event) {
   if (state.busy) event.preventDefault();
   else { state.correctionToken++; state.correctionGuidance = null; clearPasswords(modal); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null; clearKioskSelection(); }
 });
 window.addEventListener('offline', function() { setConnection(false); });
 window.addEventListener('online', function() { if (state.browserGate) checkBrowserApproval(); else if (state.context && !state.busy) refreshApp(); });
-document.addEventListener('visibilitychange', function() { if (!document.hidden && !state.busy && !modal.open) { if (state.browserGate) checkBrowserApproval(); else if (state.context) refreshApp(); } });
+document.addEventListener('visibilitychange', function() { if (!document.hidden && !expireAdminIdle() && !state.busy && !modal.open) { if (state.browserGate) checkBrowserApproval(); else if (state.context) refreshApp(); } });
+window.addEventListener('focus', function() { expireAdminIdle(); updateAdminIdleBadge(); });
+window.addEventListener('pageshow', function(event) {
+  // A BFCache document can retain an old in-memory admin token after the store
+  // expired it. Rehydrate from storage instead of signing out a replacement.
+  if (event.persisted) { requestSessionReload(); return; }
+  expireAdminIdle(); updateAdminIdleBadge();
+});
 setInterval(tick, 1000);
 setInterval(function() {
-  if (!state.context || state.busy || modal.open || document.hidden || !['record', 'overview'].includes(state.view)) return;
+  if (state.sessionReloadPending || !state.context || state.busy || modal.open || document.hidden || !['record', 'overview'].includes(state.view)) return;
   loadView(state.view, true);
 }, 30000);
 if (typeof api.subscribe === 'function') api.subscribe(function(session) {
+  if (!session && pageMode.admin) { clearAdminIdle(); state.adminIdleEstablished = false; }
   if (!session && (state.context || state.browserGate)) {
     const wasDevice = state.context?.login_kind === 'device' || Boolean(state.browserGate);
     state.context = null; state.sessionLoadToken++; state.loadToken++; state.adminDayLoadToken++; state.adminDay = null; state.nextScheduledRefresh = 0;
@@ -1754,9 +1891,18 @@ async function initialize() {
     }
   }
   captureBrowserRequest();
+  const callback = pageMode.admin && freshAdminCallback();
+  const record = readAdminIdle();
+  const savedAdmin = savedAdminSession();
+  if (record && !savedAdmin) clearAdminIdle();
+  const staleSavedAdmin = savedAdmin && (!record || idleRemaining(record) <= 0);
+  if (staleSavedAdmin && !callback) {
+    clearAdminIdle(); discardSavedAdminSession();
+    if (pageMode.admin) { state.authMessage = ADMIN_IDLE_MESSAGE; renderLogin(); return; }
+  }
   state.authBusy = true;
   try {
-    if (await api.restore()) { state.authRetryRestore = false; await enterApp(); } else { state.authRetryRestore = false; renderLogin(); }
+    if (await api.restore()) { state.authRetryRestore = false; await enterApp({freshAdmin: callback}); } else { if (pageMode.admin) { clearAdminIdle(); state.adminIdleEstablished = false; discardSavedAdminSession(); } state.authRetryRestore = false; renderLogin(); }
   } catch (error) {
     if (handleBrowserGate(error)) return;
     state.authMessage = error.message || 'Η εφαρμογή δεν μπόρεσε να συνδεθεί.'; state.authError = true;

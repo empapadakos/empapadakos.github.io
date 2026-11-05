@@ -1,6 +1,6 @@
 import config from '../config.js';
 import {createBrowserIdentityStore} from './browser-identity.js';
-import {APP_REDIRECT_URL, pageMode} from './page-mode.js';
+import {APP_REDIRECT_URL, ADMIN_STORAGE_KEY, pageMode} from './page-mode.js';
 
 export {APP_REDIRECT_URL} from './page-mode.js';
 
@@ -327,13 +327,31 @@ function transientStorage() {
 
 export function createPageTrackerApi(configuration, {mode = pageMode, adminStorage} = {}) {
   const options = {...configuration, storageKey: mode.storageKey, redirectUrl: mode.redirectUrl};
+  if (adminStorage === undefined) { try { adminStorage = globalThis.sessionStorage; } catch {} }
   if (mode.admin) {
     // Keep the terminal's persistent localStorage session entirely separate.
     // A blocked sessionStorage must never fall back to that terminal namespace.
-    if (adminStorage === undefined) { try { adminStorage = globalThis.sessionStorage; } catch {} }
     options.storage = adminStorage || transientStorage();
   }
-  return createTrackerApi(options);
+  const client = createTrackerApi(options);
+  client.discardStoredAdminSession = async function() {
+    // The store is still authenticated as its terminal. Expiring a saved admin
+    // must never use that terminal's signOut, refresh token or browser key.
+    let saved;
+    try { saved = adminStorage?.getItem(ADMIN_STORAGE_KEY); adminStorage?.removeItem(ADMIN_STORAGE_KEY); } catch {}
+    let token;
+    try { token = JSON.parse(saved || 'null')?.access_token; } catch {}
+    if (typeof token !== 'string' || !token) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), configuration.timeoutMs || 25000);
+    try {
+      await (configuration.fetchImpl || globalThis.fetch)(configuration.url + '/auth/v1/logout?scope=local', {
+        method: 'POST', headers: {apikey: configuration.key, 'Content-Type': 'application/json', Authorization: 'Bearer ' + token},
+        credentials: 'omit', cache: 'no-store', signal: controller.signal
+      });
+    } catch {} finally { clearTimeout(timer); }
+  };
+  return client;
 }
 
 export const api = createPageTrackerApi(config);

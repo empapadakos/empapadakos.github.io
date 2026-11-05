@@ -293,6 +293,8 @@ body.employee-kiosk {
 .employee-kiosk .kiosk-nav-button:hover { filter:brightness(.94); }
 .employee-kiosk .kiosk-admin-link[aria-disabled="true"] { opacity:.6; cursor:wait; }
 .login-form .auth-tabs a.button { text-decoration:none; }
+.time-input { font-variant-numeric:tabular-nums; letter-spacing:.08em; }
+.employee-kiosk .kiosk-dialog .time-input { min-height:64px; font-size:28px; text-align:center; letter-spacing:.12em; }
 .brand-text { min-width:0; font-size:17px; line-height:1.35; }
 @media (max-width:640px) {
   .topbar:has(.return-shop-button) .live-clock { display:none; }

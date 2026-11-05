@@ -118,7 +118,7 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
   const timeline=effectiveEvents(events,{includePending}),issues=[],accepted=[],counts={},scheduled=[];
   let state='OUT',openShift=null,openBreak=null,lastEvent=null;
   const current=instant(now),currentPrecise=instantNanos(now),limit=Number(maxDailyShifts??max_daily_shifts)||null;
-  const issue=(event,expected_actions,message,code='invalid_transition')=>issues.push({code,event_id:event.id??null,type:event.type,event_at:event.event_at,state_before:state,expected_actions:[...expected_actions],suggested_date:openBreak?dateKey(openBreak.event_at,timeZone):openShift?dateKey(openShift.event_at,timeZone):(instant(event.event_at)!==null?dateKey(event.event_at,timeZone):null),message});
+  const issue=(event,expected_actions,message,code='invalid_transition')=>issues.push({code,event_id:event.id??null,type:event.type,event_at:event.event_at,state_before:state,expected_actions:[...expected_actions],repair_after_at:lastEvent?.event_at??null,repair_before_at:event.event_at??null,open_shift_at:openShift?.event_at??null,open_break_at:openBreak?.event_at??null,suggested_date:openBreak?dateKey(openBreak.event_at,timeZone):openShift?dateKey(openShift.event_at,timeZone):(instant(event.event_at)!==null?dateKey(event.event_at,timeZone):null),message});
   for(const event of timeline){
     const ms=instant(event.event_at);
     if(ms===null){issue(event,[],'Η εγγραφή έχει μη έγκυρη ημερομηνία.','invalid_timestamp');continue;}
@@ -145,7 +145,7 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
   }
   const today=current===null?null:dateKey(current,timeZone);
   return {state,issues,open_shift_at:openShift?.event_at??null,open_break_at:openBreak?.event_at??null,open_shift_id:openShift?.id??null,open_break_id:openBreak?.id??null,pending_count:timeline.filter(e=>e.status==='pending').length,valid:issues.length===0,
-    last_event_at:lastEvent?.event_at??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:limit,timeZone,timeline,accepted_events:accepted,scheduled_events:scheduled,scheduled_count:scheduled.length,draft_count:(Array.isArray(events)?events:[]).filter(e=>e.status==='draft').length};
+    last_event_at:lastEvent?.event_at??null,last_event_id:lastEvent?.id??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:limit,timeZone,timeline,accepted_events:accepted,scheduled_events:scheduled,scheduled_count:scheduled.length,draft_count:(Array.isArray(events)?events:[]).filter(e=>e.status==='draft').length};
 }
 
 /** Describe missing prerequisites, never unlock an action merely because a request exists. */

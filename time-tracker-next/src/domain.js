@@ -113,11 +113,11 @@ function actionMessage(state,expected) {
 }
 
 /** Replay the full effective history; invalid transitions never silently change state. */
-export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDailyShifts,max_daily_shifts,includePending=true,includeScheduled=false,validateFuture=true}={}) {
+export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,includePending=true,includeScheduled=false,validateFuture=true}={}) {
   timeZone=timezone||timeZone;
   const timeline=effectiveEvents(events,{includePending}),issues=[],accepted=[],counts={},scheduled=[];
   let state='OUT',openShift=null,openBreak=null,lastEvent=null;
-  const current=instant(now),currentPrecise=instantNanos(now),limit=Number(maxDailyShifts??max_daily_shifts)||null;
+  const current=instant(now),currentPrecise=instantNanos(now);
   const issue=(event,expected_actions,message,code='invalid_transition')=>issues.push({code,event_id:event.id??null,type:event.type,event_at:event.event_at,state_before:state,expected_actions:[...expected_actions],repair_after_at:lastEvent?.event_at??null,repair_before_at:event.event_at??null,open_shift_at:openShift?.event_at??null,open_break_at:openBreak?.event_at??null,suggested_date:openBreak?dateKey(openBreak.event_at,timeZone):openShift?dateKey(openShift.event_at,timeZone):(instant(event.event_at)!==null?dateKey(event.event_at,timeZone):null),message});
   for(const event of timeline){
     const ms=instant(event.event_at);
@@ -136,7 +136,6 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
     const next=NEXT[state]?.[event.type]||(administrative&&event.closes_open_break===true&&state==='ON_BREAK'&&event.type==='clock_out'?'OUT':null);
     if(!next){const required=REQUIRED[state]?.[event.type]||[];issue(event,required,actionMessage(state,required));continue;}
     const key=dateKey(event.event_at,timeZone);
-    if(event.type==='clock_in'&&limit&&(counts[key]||0)>=limit){issue(event,[],`Έχει συμπληρωθεί το όριο ${limit} βαρδιών για την ημέρα.`,'daily_shift_limit');continue;}
     if(event.type==='clock_in'){openShift=event;counts[key]=(counts[key]||0)+1;}
     if(event.type==='break_start')openBreak=event;
     if(event.type==='break_end')openBreak=null;
@@ -145,11 +144,11 @@ export function replay(events,{now=new Date(),timeZone=TIMEZONE,timezone,maxDail
   }
   const today=current===null?null:dateKey(current,timeZone);
   return {state,issues,open_shift_at:openShift?.event_at??null,open_break_at:openBreak?.event_at??null,open_shift_id:openShift?.id??null,open_break_id:openBreak?.id??null,pending_count:timeline.filter(e=>e.status==='pending').length,valid:issues.length===0,
-    last_event_at:lastEvent?.event_at??null,last_event_id:lastEvent?.id??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:limit,timeZone,timeline,accepted_events:accepted,scheduled_events:scheduled,scheduled_count:scheduled.length,draft_count:(Array.isArray(events)?events:[]).filter(e=>e.status==='draft').length};
+    last_event_at:lastEvent?.event_at??null,last_event_id:lastEvent?.id??null,shift_counts:counts,today,today_shift_count:counts[today]||0,max_daily_shifts:null,timeZone,timeline,accepted_events:accepted,scheduled_events:scheduled,scheduled_count:scheduled.length,draft_count:(Array.isArray(events)?events:[]).filter(e=>e.status==='draft').length};
 }
 
 /** Describe missing prerequisites, never unlock an action merely because a request exists. */
-export function planNext(status,type,{now=new Date(),timeZone=TIMEZONE,maxDailyShifts,max_daily_shifts}={}) {
+export function planNext(status,type,{now=new Date(),timeZone=TIMEZONE}={}) {
   const state=status?.state||'OUT';
   if(!ACTIONS.includes(type))return {allowed:false,expected_actions:[],issues:[],message:'Άγνωστη ενέργεια.',suggested_date:null};
   if(status?.valid===false||status?.issues?.length){
@@ -157,9 +156,6 @@ export function planNext(status,type,{now=new Date(),timeZone=TIMEZONE,maxDailyS
   }
   const required=REQUIRED[state]?.[type]||[],next=NEXT[state]?.[type];
   const suggested_date=status?.open_break_at?dateKey(status.open_break_at,timeZone):status?.open_shift_at?dateKey(status.open_shift_at,timeZone):dateKey(now,timeZone);
-  const limit=Number(maxDailyShifts??max_daily_shifts??status?.max_daily_shifts)||null;
-  const today=dateKey(now,timeZone),count=status?.shift_counts?.[today]??(status?.today===today?status.today_shift_count:0)??0;
-  if(next&&type==='clock_in'&&limit&&count>=limit)return {allowed:false,expected_actions:[],issues:[],message:`Έχει συμπληρωθεί το όριο ${limit} βαρδιών για σήμερα.`,suggested_date:today};
   return {allowed:Boolean(next),expected_actions:[...required],issues:[],message:next?'':actionMessage(state,required),suggested_date};
 }
 
@@ -183,8 +179,8 @@ function scheduleMinutes(value) {const m=String(value||'').match(/^(\d{2}):(\d{2
 function lateness(shift,employee,timeZone,index) {
   const p=calendarParts(shift.start_at,timeZone),actual=p.hour*60+p.minute+p.second/60;
   const schedules=[scheduleMinutes(employee?.shift1_start),scheduleMinutes(employee?.shift2_start)].filter(n=>n!==null);
-  if(!schedules.length)return {late_minutes:0,scheduled_start:null};
-  const preferred=index>0&&schedules.length>1?schedules[1]:[...schedules].sort((a,b)=>Math.abs(a-actual)-Math.abs(b-actual))[0];
+  if(index>=schedules.length)return {late_minutes:0,scheduled_start:null};
+  const preferred=index===1&&schedules.length>1?schedules[1]:[...schedules].sort((a,b)=>Math.abs(a-actual)-Math.abs(b-actual))[0];
   const tolerance=Math.max(0,Number(employee?.lateness_tolerance_minutes)||0);
   return {late_minutes:Math.max(0,actual-preferred-tolerance),scheduled_start:`${pad(Math.floor(preferred/60))}:${pad(preferred%60)}`};
 }

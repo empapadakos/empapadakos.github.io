@@ -902,9 +902,9 @@ function renderEmployees() {
   const rows = (state.context?.employees || []).filter(function(e) { return state.showArchived || !e.archived; });
   return heading('Προσωπικό', 'Η ομάδα, τα τμήματα και οι ατομικές ρυθμίσεις ωραρίου.', isAdmin() ? button('Προσθήκη εργαζομένου', 'edit-employee', '', 'primary') : '') +
     '<section class="card"><div class="card-heading"><h2>' + rows.length + ' εργαζόμενοι</h2><label class="check-label"><input id="show-archived" type="checkbox"' + (state.showArchived ? ' checked' : '') + '>Εμφάνιση αρχείου</label></div>' +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Ωράρια</th><th>Βάρδιες / ημέρα</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Ωράρια</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
       rows.map(function(e) {
-        return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td>' + esc(e.max_daily_shifts) + '</td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +
+        return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +
           (isAdmin() ? button('Επεξεργασία', 'edit-employee', 'data-id="' + esc(e.id) + '"', 'small') + button(e.archived ? 'Επαναφορά' : 'Αρχειοθέτηση', 'archive-employee', 'data-id="' + esc(e.id) + '" data-archived="' + !e.archived + '" data-mutate', 'small') : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'small')) + '</div></td></tr>';
       }).join('') + '</tbody></table></div>' : empty('Δεν υπάρχει προσωπικό', 'Πρόσθεσε τους εργαζομένους για να ξεκινήσουν οι καταγραφές.')) + '</section>';
 }
@@ -1060,7 +1060,7 @@ function correctionSuggestionForState(current, requestedAction = null, details =
   const issue = current.issues?.[0] || details.issues?.[0] || null;
   let plan;
   if (requestedAction) {
-    try { plan = planNext(current, requestedAction, { now: now(), maxDailyShifts: employee(state.selectedId)?.max_daily_shifts }); } catch {}
+    try { plan = planNext(current, requestedAction, { now: now() }); } catch {}
   }
   let actions = issue ? issue.expected_actions : (details.expected_actions || plan?.expected_actions || []);
   if (!Array.isArray(actions)) actions = [];
@@ -1259,8 +1259,7 @@ function openEmployee(id) {
     field('Σειρά εμφάνισης', 'sort_order', e.sort_order ?? 0, 'number', 'min="0" max="100000" required') +
     field('Έναρξη πρώτου ωραρίου', 'shift1_start', e.shift1_start?.slice(0, 5) || '', 'time') +
     field('Έναρξη δεύτερου ωραρίου', 'shift2_start', e.shift2_start?.slice(0, 5) || '', 'time') +
-    field('Ανοχή καθυστέρησης · λεπτά', 'lateness_tolerance_minutes', e.lateness_tolerance_minutes || 0, 'number', 'min="0" max="240" required') +
-    selectField('Μέγιστες βάρδιες ανά ημέρα', 'max_daily_shifts', option('', 'Επίλεξε βάρδιες', e.max_daily_shifts ?? '') + option('1', '1 βάρδια', e.max_daily_shifts ?? '') + option('2', '2 βάρδιες', e.max_daily_shifts ?? ''), 'required') + '</div>';
+    field('Ανοχή καθυστέρησης · λεπτά', 'lateness_tolerance_minutes', e.lateness_tolerance_minutes || 0, 'number', 'min="0" max="240" required') + '</div>';
   openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Τα ωράρια χρησιμοποιούνται για τον υπολογισμό καθυστέρησης.', body, submitButton('Αποθήκευση'), 'employee');
 }
 function openVoid(ids) {
@@ -1576,11 +1575,9 @@ async function handleModalForm(form, decision) {
       closeModal(); toast(payload.decision === 'approve' ? 'Η διόρθωση εγκρίθηκε.' : 'Η διόρθωση απορρίφθηκε.', 'success'); await refreshApp(); return;
     }
     if (kind === 'employee') {
-      const maxDailyShifts = Number(f.max_daily_shifts.value);
-      if (![1, 2].includes(maxDailyShifts)) throw new Error('Επίλεξε 1 ή 2 βάρδιες ανά ημέρα για τον εργαζόμενο.');
       const payload = {
         name: f.name.value.trim(), department: f.department.value.trim(), color: f.color.value,
-        sort_order: Number(f.sort_order.value), max_daily_shifts: maxDailyShifts,
+        sort_order: Number(f.sort_order.value),
         shift1_start: f.shift1_start.value ? normalizeTime(f.shift1_start.value) : null, shift2_start: f.shift2_start.value ? normalizeTime(f.shift2_start.value) : null,
         lateness_tolerance_minutes: Number(f.lateness_tolerance_minutes.value)
       };

@@ -24,7 +24,8 @@ const state = {
   context: null, view: 'record', overview: null, selectedId: '', employeeData: null,
   historyId: '', historyDataset: 'current', historyData: null, historyFrom: '', historyTo: '', historyStatus: '', historyType: '',
   requests: null, requestStatus: 'pending', requestEmployee: '',
-  statsId: '', statsDataset: 'current', month: '', statsMode: 'effective', monthData: null, stats: null, statsShowArchived: false, statsExpandedBreakDays: {},
+  statsId: '', statsDataset: 'current', month: '', statsMode: 'effective', monthData: null, stats: null, statsShowArchived: false,
+  statsSearch: '', statsDepartment: '', statsFilter: 'all', statsSelectedDay: '', statsSelectionScope: '',
   adminData: null, audit: [], auditCursor: null, showArchived: false,
   search: '', department: '', busy: false, loadToken: 0, personToken: 0, connected: true,
   serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false,
@@ -495,7 +496,7 @@ function handleBrowserGate(error) {
 }
 function renderBrowserGate() {
   const gate = state.browserGate; if (!gate) return;
-  document.body.classList.remove('employee-kiosk');
+  document.body.classList.remove('employee-kiosk', 'attendance-page');
   clearPasswords(app);
   const revoked = gate.status === 'revoked'; const unavailable = gate.status === 'unavailable';
   const notification = gate.notification?.status;
@@ -534,7 +535,7 @@ async function checkBrowserApproval() {
 }
 function renderLogin() {
   state.context = null;
-  document.body.classList.remove('employee-kiosk');
+  document.body.classList.remove('employee-kiosk', 'attendance-page');
   clearPasswords(app);
   state.authMode = pageMode.admin ? 'admin' : 'device';
   const device = !pageMode.admin;
@@ -577,6 +578,7 @@ async function enterApp({freshAdmin = false} = {}) {
 function renderShell() {
   const ctx = state.context;
   document.body.classList.toggle('employee-kiosk', isOperator());
+  document.body.classList.toggle('attendance-page', state.view === 'stats' && !isOperator());
   if (isOperator()) {
     app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ ' + esc(APP_NAME) + '</h1><nav class="kiosk-nav" aria-label="Κύρια πλοήγηση">' +
       adminIdleBadge() + '<button class="kiosk-nav-button active" type="button" data-action="kiosk-home" aria-current="page">🏠 Κατάστημα</button><a class="kiosk-nav-button kiosk-admin-link" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a></nav></header>' +
@@ -644,6 +646,7 @@ async function loadView(view, silent = false) {
 }
 function renderCurrentView() {
   const main = document.getElementById('main'); if (!main) return;
+  document.body.classList.toggle('attendance-page', state.view === 'stats' && !isOperator());
   const renders = { record: renderRecord, overview: renderOverview, history: renderHistory, requests: renderRequests, stats: renderStats, employees: renderEmployees, settings: renderSettings, audit: renderAudit };
   main.innerHTML = (renders[state.view] || renderOverview)(); colorAvatars(); setBusy(state.busy); tick();
 }
@@ -920,10 +923,10 @@ function renderAdminDayEditor() {
 async function openAdminDay(employeeId, date, preferred = {}) {
   if (!isAdmin() || isArchiveView() || !employeeId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
   const token = ++state.adminDayLoadToken;
-  const view = state.view, selected = view === 'stats' ? state.statsId : (view === 'history' ? state.historyId : null);
+  const view = state.view, selected = view === 'stats' ? state.statsId : (view === 'history' ? state.historyId : null), reportScope = statsScope();
   try {
     const data = await api.read('admin_day', { employee_id: employeeId, date });
-    if (token !== state.adminDayLoadToken || !isAdmin() || isArchiveView() || state.view !== view || (view === 'stats' && state.statsId !== selected) || (view === 'history' && state.historyId !== selected)) return;
+    if (token !== state.adminDayLoadToken || !isAdmin() || isArchiveView() || state.view !== view || (view === 'stats' && (state.statsId !== selected || reportScope !== statsScope())) || (view === 'history' && state.historyId !== selected)) return;
     setServerTime(data.server_now);
     state.adminDay = buildAdminDayModel({ ...data, date, employee: data.employee || employee(employeeId) }, preferred);
     const model = state.adminDay;
@@ -962,26 +965,13 @@ function adminDayEntriesFromForm(form) {
   return entries;
 }
 const STATS_MONTHS = ['Ιανουάριος', 'Φεβρουάριος', 'Μάρτιος', 'Απρίλιος', 'Μάιος', 'Ιούνιος', 'Ιούλιος', 'Αύγουστος', 'Σεπτέμβριος', 'Οκτώβριος', 'Νοέμβριος', 'Δεκέμβριος'];
-function statsHeaderRows() {
-  return '<tr><th rowspan="2" scope="col" class="attendance-day-heading">Ημέρα / Ημερομηνία</th><th rowspan="2" scope="col" class="attendance-notes-heading">Σημειώσεις</th>' +
-    '<th colspan="2" scope="colgroup" class="attendance-presence-heading">Παρουσία</th><th colspan="2" scope="colgroup" class="attendance-hours-heading">Ώρες</th>' +
-    [1, 2, 3].map(function(i) { return '<th colspan="2" scope="colgroup" class="attendance-break-heading">Διάλειμμα ' + i + '</th>'; }).join('') +
-    '<th colspan="2" scope="colgroup" class="attendance-break-total-heading">Σύνολο Διαλ.</th><th rowspan="2" scope="col" class="attendance-late-heading">Αργοπορία</th></tr>' +
-    '<tr><th scope="col" class="attendance-presence-heading">Είσοδος</th><th scope="col" class="attendance-presence-heading">Έξοδος</th>' +
-    '<th scope="col" class="attendance-hours-heading">Σύνολο</th><th scope="col" class="attendance-hours-heading" title="Διαφορά από τον ημερήσιο στόχο παρουσίας">Υπερ./Έλλ.</th>' +
-    [1, 2, 3].map(function() { return '<th scope="col" class="attendance-break-heading">Έναρξη</th><th scope="col" class="attendance-break-heading">Λήξη</th>'; }).join('') +
-    '<th scope="col" class="attendance-break-total-heading">Λεπτά</th><th scope="col" class="attendance-break-total-heading">Υπέρβαση</th></tr>';
-}
 function statsFullDate(key) {
   const value = new Intl.DateTimeFormat('el-GR', { timeZone: 'Europe/Athens', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(key + 'T12:00:00Z'));
   return value.charAt(0).toLocaleUpperCase('el-GR') + value.slice(1);
 }
-function statsHours(minutes, signed = false) {
-  const value = Number(minutes) || 0;
-  return (signed && value > 0 ? '+' : '') + (value / 60).toFixed(2) + 'h';
-}
+function statsHours(minutes) { return formatMinutes(Number(minutes) || 0); }
 function statsMinuteText(minutes) { return Math.round(Number(minutes) || 0) + 'λ'; }
-function statsBreakExpansionKey(date) { return viewDataset('stats') + ':' + state.statsId + ':' + state.month + ':' + date; }
+function statsScope() { return viewDataset('stats') + ':' + state.statsId + ':' + state.month; }
 function statsYears() {
   const current = Number(today().slice(0, 4)), selected = Number(String(state.month).slice(0, 4));
   const years = new Set();
@@ -995,122 +985,162 @@ function statsYears() {
   }
   return [...years].sort(function(a, b) { return a - b; });
 }
-function statsEmployeeTiles() {
-  const people = (state.context?.employees || []).filter(function(e) { return state.statsShowArchived || !e.archived || String(e.id) === String(state.statsId); });
-  const selectedArchived = people.some(function(e) { return e.archived && String(e.id) === String(state.statsId); });
-  return '<label class="check-label attendance-archive-toggle"><input type="checkbox" name="stats_show_archived"' + (state.statsShowArchived ? ' checked' : '') + '>Εμφάνιση αρχειοθετημένων εργαζομένων</label>' +
-    '<div class="attendance-employee-tiles" role="group" aria-label="Επιλογή εργαζομένου">' + people.map(function(e) {
-      const selected = String(e.id) === String(state.statsId);
-      return '<button type="button" class="attendance-employee-tile' + (selected ? ' selected' : '') + '" data-action="stats-select-employee" data-id="' + esc(e.id) + '" aria-pressed="' + selected + '">' + esc(e.name) + (e.archived ? '<small>Αρχειοθετημένος</small>' : '') + '</button>';
-    }).join('') + '</div>' + (selectedArchived && !state.statsShowArchived ? '<p class="field-help">Ο επιλεγμένος αρχειοθετημένος εργαζόμενος παραμένει ορατός.</p>' : '');
+function statsEmployeeList() {
+  const search = state.statsSearch.trim().toLocaleLowerCase('el-GR');
+  const people = (state.context?.employees || []).filter(function(e) {
+    return (state.statsShowArchived || !e.archived || String(e.id) === String(state.statsId)) &&
+      (!state.statsDepartment || e.department === state.statsDepartment) &&
+      (!search || (e.name + ' ' + (e.department || '')).toLocaleLowerCase('el-GR').includes(search));
+  });
+  return people.length ? people.map(function(e) {
+    const selected = String(e.id) === String(state.statsId);
+    return '<button type="button" class="attendance-person' + (selected ? ' selected' : '') + '" data-action="stats-select-employee" data-id="' + esc(e.id) + '" aria-pressed="' + selected + '">' + avatar(e) + '<span><strong>' + esc(e.name) + '</strong><small>' + esc(e.department || 'Χωρίς τμήμα') + (e.archived ? ' · Αρχειοθετημένος' : '') + '</small></span>' + (selected ? '<span class="attendance-person-check" aria-hidden="true">✓</span>' : '') + '</button>';
+  }).join('') : '<p class="attendance-list-empty" role="status">Δεν βρέθηκαν εργαζόμενοι με αυτά τα φίλτρα.</p>';
+}
+function statsPeoplePanel() {
+  const departments = [...new Set((state.context?.employees || []).map(function(e) { return e.department; }).filter(Boolean))].sort();
+  const selectedArchived = employee(state.statsId)?.archived && !state.statsShowArchived;
+  return '<aside class="attendance-people" aria-label="Εργαζόμενοι"><div class="attendance-people-heading"><h2>Εργαζόμενοι</h2><span>' + (state.context?.employees || []).filter(function(e) { return !e.archived; }).length + '</span></div>' +
+    '<div class="field attendance-search"><label class="sr-only" for="attendance-search">Αναζήτηση εργαζομένου</label><input id="attendance-search" type="search" placeholder="Αναζήτηση εργαζομένου…" value="' + esc(state.statsSearch) + '"></div>' +
+    (departments.length > 1 ? selectField('Τμήμα', 'stats_department', option('', 'Όλα τα τμήματα', state.statsDepartment) + departments.map(function(d) { return option(d, d, state.statsDepartment); }).join('')) : '') +
+    '<label class="check-label attendance-archive-toggle"><input type="checkbox" name="stats_show_archived"' + (state.statsShowArchived ? ' checked' : '') + '>Και αρχειοθετημένοι</label>' +
+    '<div id="attendance-employee-list" class="attendance-employee-list" role="group" aria-label="Επιλογή εργαζομένου">' + statsEmployeeList() + '</div>' +
+    (selectedArchived ? '<p class="field-help">Ο επιλεγμένος αρχειοθετημένος εργαζόμενος παραμένει ορατός.</p>' : '') + '</aside>';
 }
 function statsNoteCell(day, canEdit) {
   return (canEdit ? '<button type="button" class="note-chip" data-action="edit-note" data-date="' + esc(day.date) + '">' : '<span class="note-chip">') +
-    (day.note ? '<strong>' + esc(NOTES[day.note.kind] || 'Σημείωση') + '</strong>' + (day.note.text ? '<br>' + esc(day.note.text) : '') : (canEdit ? '+ Σημείωση' : '—')) +
+    (day.note ? '<strong>' + esc(NOTES[day.note.kind] || 'Σημείωση') + '</strong>' + (day.note.text ? '<br>' + esc(day.note.text) : '') : (canEdit ? '+ Σημείωση' : 'Δεν υπάρχει σημείωση.')) +
     (canEdit ? '</button>' : '</span>');
 }
-function statsBreakTime(br, type, day, preview) {
-  if (!br && preview.shifts.length) return '<span class="muted">—</span>';
-  const start = type === 'break_start', value = start ? br?.start_at : br?.end_at;
-  const id = start ? br?.start_id : (br?.generated_end ? null : br?.end_id);
-  return timeCell(value, id, state.statsId, { date: day.date, type, shift_ref: br?.shift_ref || preview.shifts[0]?.start_id, break_ref: br?.start_id });
+function statsDayDrafts(day, rawEvents) { return rawEvents.filter(function(e) { return e.status === 'draft' && (e.admin_day || dateKey(e.event_at)) === day.date; }); }
+function statsNeedsAttention(day, rawEvents) {
+  return Boolean(day.pending_count || day.issues.length || day.shortfall_minutes || day.break_excess_minutes || day.late_minutes || day.early_departure_minutes || statsDayDrafts(day, rawEvents).length || (day.has_open_shift && day.date < today()));
 }
-function statsBreakAnnotation(br) {
-  return (br.generated_end ? '<small class="break-line">Κλείσιμο με την έξοδο</small>' : '') +
-    (!br.closed ? '<small class="break-line">Ανοιχτό διάλειμμα</small>' : '') +
-    (br.period > 1 ? '<small class="break-line">' + br.period + 'η παρουσία</small>' : '');
+function statsHasPresence(day, preview) { return Boolean(day.shifts.length || preview.shifts.length); }
+function statsDayStatus(day, preview, rawEvents) {
+  const tags = [];
+  if (day.pending_count) tags.push('<span class="badge amber">' + day.pending_count + ' εκκρεμείς</span>');
+  if (day.issues.length || (day.has_open_shift && day.date < today())) tags.push('<span class="badge red">Χρειάζεται έλεγχο</span>');
+  else if (day.has_open_shift || (day.shifts.length && day.date === today() && !day.evaluation_complete)) tags.push('<span class="badge blue">Σε εξέλιξη</span>');
+  else if (day.shortfall_minutes || day.break_excess_minutes || day.late_minutes || day.early_departure_minutes) tags.push('<span class="badge red">Απόκλιση</span>');
+  else if (day.evaluation_complete) tags.push('<span class="badge green">Ολοκληρωμένη</span>');
+  if (statsDayDrafts(day, rawEvents).length) tags.push('<span class="badge amber">Πρόχειρη</span>');
+  if (preview.shifts.some(function(s) { return isScheduledEvent({source:'admin',status:'approved',event_at:s.start_at}) || isScheduledEvent({source:'admin',status:'approved',event_at:s.end_at}); })) tags.push('<span class="badge blue">Ορισμένη ώρα</span>');
+  if (day.note) tags.push('<span class="attendance-note-indicator" title="' + esc(day.note.text || NOTES[day.note.kind]) + '">' + esc(NOTES[day.note.kind] || 'Σημείωση') + '</span>');
+  return tags.length ? tags.join('') : '<span class="attendance-empty-label">—</span>';
 }
-function statsPresenceCell(day, preview, type, canEdit, rawById) {
-  const entry = type === 'clock_in', attrs = 'data-employee="' + esc(state.statsId) + '" data-date="' + esc(day.date) + '"';
-  if (!preview.shifts.length) return timeCell(null, null, state.statsId, { date: day.date, type });
-  return preview.shifts.map(function(shift, index) {
-    const value = entry ? shift.start_at : shift.end_at, id = entry ? shift.start_id : shift.end_id;
-    let description = '';
-    if (entry) {
-      if (shift.pending) description += '<small class="break-line"><span class="badge amber">Προσωρινή</span></small>';
-      if ([shift.start_id, shift.end_id].some(function(key) { return isScheduledEvent(rawById.get(String(key))); })) description += '<small class="planned-line">Ορισμένη ώρα</small>';
-      if (shift.carried_in) description += '<small class="break-line">Από ' + esc(displayDate(shift.start_at)) + '</small>';
-      if (canEdit) description += button('+ Διάλειμμα', 'admin-day', attrs + ' data-add="break" data-shift="' + esc(shift.start_id || '') + '"', 'text small attendance-add-break');
-    } else {
-      if (!shift.closed) description += '<small class="break-line">Χωρίς έξοδο · ανοιχτή βάρδια</small>';
-      else if (shift.carried_out) description += '<small class="break-line">Έως ' + esc(displayDate(shift.end_at)) + '</small>';
-    }
-    return '<div class="attendance-period"><span class="shift-line">' + (index ? '<small class="attendance-period-number">' + (index + 1) + 'η · </small>' : '') +
-      timeCell(value, id, state.statsId, { date: day.date, type, shift_ref: shift.start_id }) + '</span>' + description + '</div>';
+function statsDayRow(day, preview, rawEvents) {
+  const selected = state.statsSelectedDay === day.date, present = statsHasPresence(day, preview);
+  const presence = preview.shifts.map(function(shift, index) {
+    const early = day.early_departure_minutes > 0 && String(shift.end_id) === String(day.final_departure_id);
+    return '<div class="attendance-presence-line mono"><span' + (shift.late_minutes ? ' class="attendance-negative"' : '') + '>' + esc(displayTime(shift.start_at)) + '</span><span class="attendance-time-separator">–</span><span' + (early ? ' class="attendance-negative"' : '') + '>' + (shift.end_at ? esc(displayTime(shift.end_at)) : '…') + '</span>' +
+      (shift.carried_in || shift.carried_out ? '<span class="attendance-crossday" title="Παρουσία μεταξύ ημερών">↗</span>' : '') + '</div>' +
+      (shift.late_minutes ? '<small class="attendance-negative">Αργοπορία ' + statsMinuteText(shift.late_minutes) + '</small>' : '') +
+      (early ? '<small class="attendance-negative">Πρόωρη έξοδος ' + statsMinuteText(day.early_departure_minutes) + '</small>' : '');
   }).join('');
-}
-function statsDayRows(day, preview, rawEvents, rawById, canEdit) {
-  const drafts = rawEvents.filter(function(e) { return e.status === 'draft' && (e.admin_day || dateKey(e.event_at)) === day.date; });
   const planned = rawEvents.some(function(e) { return isScheduledEvent(e) && dateKey(e.event_at) === day.date; });
-  const breaks = preview.shifts.flatMap(function(shift, index) { return (shift.breaks || []).map(function(br) { return {...br, shift_ref: shift.start_id, period: index + 1}; }); });
-  const extra = breaks.slice(3), expanded = state.statsExpandedBreakDays[statsBreakExpansionKey(day.date)] === true;
-  const dayAttrs = 'data-employee="' + esc(state.statsId) + '" data-date="' + esc(day.date) + '"';
-  const detailId = 'attendance-extra-' + day.date;
-  const hasClosed = day.shifts.some(function(shift) { return shift.closed; });
-  let cells = '<td class="attendance-day-cell' + ([0, 6].includes(day.weekday) ? ' day-weekend' : '') + '"><strong>' + esc(statsFullDate(day.date)) + '</strong>' +
-    (canEdit ? button('Ώρες ημέρας', 'admin-day', dayAttrs, 'text small') : '') + '</td><td class="attendance-note-cell">' + statsNoteCell(day, canEdit) + '</td>';
-  cells += '<td colspan="2" class="attendance-presence-cell">' + (preview.shifts.length ? preview.shifts.map(function(shift, index) {
-    const single = {shifts: [shift]};
-    return '<div class="attendance-period-pair">' + (preview.shifts.length > 1 ? '<small class="attendance-pair-label">' + (index + 1) + 'η παρουσία</small>' : '') +
-      '<div class="attendance-period-entry" role="group" aria-label="Είσοδος ' + (index + 1) + 'ης παρουσίας">' + statsPresenceCell(day, single, 'clock_in', canEdit, rawById) + '</div><div class="attendance-period-exit" role="group" aria-label="Έξοδος ' + (index + 1) + 'ης παρουσίας">' + statsPresenceCell(day, single, 'clock_out', canEdit, rawById) + '</div></div>';
-  }).join('') : '<div class="attendance-period-pair"><div role="group" aria-label="Είσοδος">' + statsPresenceCell(day, preview, 'clock_in', canEdit, rawById) + '</div><div role="group" aria-label="Έξοδος">' + statsPresenceCell(day, preview, 'clock_out', canEdit, rawById) + '</div></div>') +
-    (canEdit && preview.shifts.length ? button('+ Βάρδια', 'admin-day', dayAttrs + ' data-add="shift"', 'text small') : '') +
-    drafts.map(function(e) { return '<small class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' ' + esc(displayTime(e.event_at)) + (canEdit ? ' ' + button('Συμπλήρωση', 'admin-day', dayAttrs + ' data-id="' + esc(e.id) + '"', 'text small') : '') + '</small>'; }).join('') +
-    '</td>';
-  cells += '<td class="attendance-hours-cell"><strong class="mono">' + (hasClosed ? esc(statsHours(day.gross_minutes)) : '—') + '</strong>' +
-    (planned && preview.gross_minutes ? '<small class="planned-line">Ορισμένη παρουσία: ' + esc(formatMinutes(preview.gross_minutes)) + '</small>' : '') +
-    (day.has_open_shift ? '<small class="break-line">Ανοιχτή: ' + esc(formatMinutes(day.estimated_open_minutes)) + '</small>' : '') +
-    (day.pending_count ? '<small class="break-line">' + day.pending_count + ' εκκρεμείς κινήσεις</small>' : '') + '</td>' +
-    '<td class="attendance-hours-cell attendance-variance' + (day.variance_minutes < 0 ? ' negative' : '') + '"><span class="mono">' + (day.target_minutes ? esc(statsHours(day.variance_minutes, true)) : '—') + '</span></td>';
-  for (let index = 0; index < 3; index++) {
-    const br = breaks[index];
-    const empty = !br && index > 0;
-    cells += '<td class="attendance-break-cell">' + (empty ? '<span class="muted">—</span>' : statsBreakTime(br, 'break_start', day, preview)) + (br && br.period > 1 ? '<small class="break-line">' + br.period + 'η παρουσία</small>' : '') +
-      '</td><td class="attendance-break-cell">' + (empty ? '<span class="muted">—</span>' : statsBreakTime(br, 'break_end', day, preview)) + (br ? statsBreakAnnotation(br) : '') + '</td>';
-  }
-  cells += '<td class="attendance-break-total-cell"><strong class="mono">' + (day.break_count || day.break_minutes ? esc(statsMinuteText(day.break_minutes)) : '—') + '</strong>' +
-    (extra.length ? '<button type="button" class="button text small attendance-break-toggle" data-action="stats-toggle-breaks" data-date="' + esc(day.date) + '" aria-expanded="' + expanded + '" aria-controls="' + detailId + '">' + (expanded ? 'Σύμπτυξη διαλειμμάτων' : '+ ' + extra.length + (extra.length === 1 ? ' επιπλέον διάλειμμα' : ' επιπλέον διαλείμματα')) + '</button>' : '') + '</td>' +
-    '<td class="attendance-break-total-cell' + (day.break_excess_minutes ? ' negative' : '') + '"><span class="mono">' + (day.break_excess_minutes ? esc(statsMinuteText(day.break_excess_minutes)) : '—') + '</span></td>' +
-    '<td class="attendance-late-cell"><span class="mono">' + (day.late_minutes ? esc(statsMinuteText(day.late_minutes)) : '—') + '</span></td>';
-  let html = '<tr data-stats-day="' + esc(day.date) + '" class="' + (day.pending_count ? 'subtle-row ' : '') + (!preview.shifts.length && !drafts.length ? 'attendance-empty-day' : '') + '">' + cells + '</tr>';
-  if (extra.length && expanded) html += '<tr id="' + detailId + '" class="attendance-extra-row"><td colspan="15"><section aria-label="Επιπλέον διαλείμματα ' + esc(dateDisplay(day.date)) + '"><div class="attendance-extra-heading"><strong>' + esc(statsFullDate(day.date)) + ' · επιπλέον διαλείμματα</strong></div><div class="attendance-extra-breaks">' +
-    extra.map(function(br, index) { return '<div class="attendance-extra-break"><h4>Διάλειμμα ' + (index + 4) + (br.period > 1 ? ' · ' + br.period + 'η παρουσία' : '') + '</h4><div class="attendance-extra-pair"><div><span>Έναρξη</span>' + statsBreakTime(br, 'break_start', day, preview) + '</div><div><span>Λήξη</span>' + statsBreakTime(br, 'break_end', day, preview) + '</div></div>' + statsBreakAnnotation(br) + '</div>'; }).join('') + '</div></section></td></tr>';
-  return html;
+  return '<tr data-stats-day="' + esc(day.date) + '" class="' + (selected ? 'attendance-selected-day ' : '') + (!present ? 'attendance-empty-day ' : '') + ([0,6].includes(day.weekday) ? 'attendance-weekend' : '') + '">' +
+    '<td><button type="button" class="attendance-day-select" data-action="stats-select-day" data-date="' + esc(day.date) + '" aria-pressed="' + selected + '" aria-controls="attendance-day-detail" aria-label="Λεπτομέρειες: ' + esc(statsFullDate(day.date)) + '"><strong>' + esc(dateDisplay(day.date).slice(0,5)) + '</strong><small>' + esc(new Intl.DateTimeFormat('el-GR', {weekday:'short',timeZone:'Europe/Athens'}).format(new Date(day.date + 'T12:00:00Z'))) + '</small></button></td>' +
+    '<td>' + (presence || '<span class="attendance-empty-label">—</span>') + '</td>' +
+    '<td><strong class="mono">' + (day.break_count || day.break_minutes ? statsMinuteText(day.break_minutes) : '—') + '</strong>' +
+    (day.break_count ? '<small>' + day.break_count + (day.break_count === 1 ? ' διάλειμμα' : ' διαλείμματα') + '</small>' : '') +
+    (day.break_excess_minutes ? '<small class="attendance-negative">+' + statsMinuteText(day.break_excess_minutes) + ' υπέρβαση</small>' : '') + '</td>' +
+    '<td><strong class="mono' + (day.shortfall_minutes ? ' attendance-negative' : '') + '">' + (day.shifts.some(function(s) { return s.closed; }) ? statsHours(day.gross_minutes) : '—') + '</strong>' +
+    (day.shortfall_minutes > 0 ? '<small class="attendance-negative">−' + Math.round(day.shortfall_minutes) + ' λ από το ' + (day.target_minutes === 480 ? '8ωρο' : esc(formatMinutes(day.target_minutes))) + '</small>' : '') +
+    (day.has_open_shift ? '<small>Ανοιχτή: ' + esc(formatMinutes(day.estimated_open_minutes)) + '</small>' : '') +
+    (planned && preview.gross_minutes ? '<small class="planned-line">Ορισμένη παρουσία: ' + esc(formatMinutes(preview.gross_minutes)) + '</small>' : '') + '</td>' +
+    '<td><div class="attendance-day-status">' + statsDayStatus(day, preview, rawEvents) + '</div></td></tr>';
+}
+function statsTimelineEntry(type, value, id, day, refs, rawById, description = '', generated = false) {
+  const raw = rawById.get(String(id));
+  const planned = isScheduledEvent(raw), pending = raw?.status === 'pending';
+  const time = generated ? '<span class="mono">' + esc(displayTime(value)) + '</span>' : timeCell(value, id, state.statsId, {date: day.date, type, ...refs});
+  return '<li class="attendance-timeline-event' + (type.startsWith('break_') ? ' attendance-timeline-break' : '') + (planned ? ' attendance-timeline-planned' : '') + '"><span class="attendance-event-dot" aria-hidden="true"></span><div><strong>' + esc(ACTIONS[type]) + '</strong>' +
+    (value && dateKey(value) !== day.date ? '<small>' + esc(displayDate(value)) + ' · άλλη ημέρα</small>' : '') +
+    (description ? '<small>' + description + '</small>' : '') + (generated ? '<small>Κλείσιμο με την έξοδο</small>' : '') +
+    (planned ? '<small class="planned-line">Ορισμένη ώρα · εκτός πραγματικών συνόλων</small>' : '') + (pending ? '<small class="attendance-pending">Προσωρινή · εκκρεμεί έγκριση</small>' : '') + '</div><div class="attendance-event-time">' + time + '</div></li>';
+}
+function statsDayPanel(day, preview, rawEvents, rawById, canEdit) {
+  if (!day) return '<aside id="attendance-day-detail" class="attendance-detail attendance-detail-empty" aria-label="Λεπτομέρειες ημέρας">' + empty('Επίλεξε μια ημέρα', 'Δες αναλυτικά κάθε παρουσία, διάλειμμα και σημείωση.') + '</aside>';
+  const attrs = 'data-employee="' + esc(state.statsId) + '" data-date="' + esc(day.date) + '"';
+  const shown = new Set();
+  let breakNumber = 0;
+  const periods = preview.shifts.map(function(shift, index) {
+    const refs = {shift_ref:shift.start_id}, items = [];
+    function add(type, value, id, extra = {}, description = '', generated = false) { if (id) shown.add(String(id)); items.push({value,html:statsTimelineEntry(type,value,id,day,{...refs,...extra},rawById,description,generated)}); }
+    add('clock_in',shift.start_at,shift.start_id,{},shift.late_minutes ? '<span class="attendance-negative">Αργοπορία ' + statsMinuteText(shift.late_minutes) + '</span>' : '');
+    for (const br of shift.breaks || []) {
+      add('break_start',br.start_at,br.start_id,{break_ref:br.start_id},'Διάλειμμα ' + (++breakNumber));
+      add('break_end',br.end_at,br.generated_end ? null : br.end_id,{break_ref:br.start_id},!br.closed ? 'Ανοιχτό διάλειμμα' : '',br.generated_end);
+    }
+    add('clock_out',shift.end_at,shift.end_id,{},!shift.closed ? 'Χωρίς έξοδο · ανοιχτή βάρδια' : (day.early_departure_minutes && String(shift.end_id) === String(day.final_departure_id) ? '<span class="attendance-negative">Πρόωρη έξοδος ' + statsMinuteText(day.early_departure_minutes) + '</span>' : ''));
+    items.sort(function(a,b) { return (a.value ? Date.parse(a.value) : Infinity) - (b.value ? Date.parse(b.value) : Infinity); });
+    return '<section class="attendance-detail-period"><div class="attendance-detail-period-heading"><h3>' + (index + 1) + 'η παρουσία</h3>' + (shift.closed && !isScheduledEvent(rawById.get(String(shift.end_id))) ? '<span class="mono">' + esc(formatMinutes(shift.gross_minutes)) + '</span>' : '') + '</div><ol class="attendance-timeline">' + items.map(function(item) { return item.html; }).join('') + '</ol>' +
+      (canEdit ? button('+ Διάλειμμα', 'admin-day', attrs + ' data-add="break" data-shift="' + esc(shift.start_id) + '"', 'text small') : '') + '</section>';
+  }).join('');
+  const extra = rawEvents.filter(function(e) { return !shown.has(String(e.id)) && !['void','rejected'].includes(e.status) && (e.admin_day || dateKey(e.event_at)) === day.date; });
+  return '<aside id="attendance-day-detail" class="attendance-detail" aria-label="Λεπτομέρειες ημέρας" tabindex="-1"><div class="attendance-detail-heading"><div><span class="attendance-kicker">Ανάλυση ημέρας</span><h2>' + esc(statsFullDate(day.date)) + '</h2></div><button type="button" class="icon-button" data-action="stats-close-day" aria-label="Κλείσιμο ανάλυσης ημέρας">×</button></div>' +
+    '<div class="attendance-detail-status">' + statsDayStatus(day, preview, rawEvents) + '</div>' +
+    (canEdit ? '<div class="attendance-detail-actions">' + button('Ώρες ημέρας', 'admin-day', attrs, 'small') + (preview.shifts.length ? button('+ Βάρδια', 'admin-day', attrs + ' data-add="shift"', 'text small') : '') + '</div>' : '') +
+    (day.issues.length ? '<p class="attendance-issue" role="status">' + day.issues.map(function(issue) { return esc(issue.message || 'Χρειάζεται έλεγχος ακολουθίας.'); }).join('<br>') + '</p>' : '') +
+    (periods || '<div class="attendance-day-empty"><span aria-hidden="true">◷</span><p>Δεν υπάρχουν παρουσίες.</p>' + (canEdit ? timeCell(null,null,state.statsId,{date:day.date,type:'clock_in'}) : '') + '</div>') +
+    (extra.length ? '<section class="attendance-detail-extra"><h3>Πρόσθετες κινήσεις</h3><ol class="attendance-timeline">' + [...extra].sort(function(a,b) { return Date.parse(a.event_at)-Date.parse(b.event_at); }).map(function(e) { return statsTimelineEntry(e.type,e.event_at,e.id,day,{shift_ref:e.shift_ref,break_ref:e.break_ref},rawById,e.status === 'draft' ? '<span class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' · εκτός συνόλων</span>' : (e.status === 'pending' && state.statsMode === 'approved' ? 'Εκκρεμής · εκτός εγκεκριμένων συνόλων' : 'Χρειάζεται έλεγχο')); }).join('') + '</ol></section>' : '') +
+    '<section class="attendance-day-note"><h3>Σημείωση ημέρας</h3>' + statsNoteCell(day, canEdit) + '</section></aside>';
+}
+function statsTableHeader() { return '<tr><th scope="col">Ημέρα</th><th scope="col">Παρουσίες</th><th scope="col">Διαλείμματα</th><th scope="col">Ώρες</th><th scope="col">Κατάσταση</th></tr>'; }
+function statsSummary(totals, pending, target = 480) {
+  const deficitLabel = Number(target) === 480 ? 'Έλλειμμα 8ώρου' : 'Έλλειμμα στόχου';
+  const metrics = [['Παρουσία',statsHours(totals.gross_minutes),'Οι ώρες περιλαμβάνουν τα διαλείμματα'],['Ημέρες εργασίας',totals.worked_days || 0,'Με ολοκληρωμένη παρουσία'],['Διαλείμματα',formatMinutes(totals.break_minutes),'Συνολικός χρόνος'],[deficitLabel,formatMinutes(totals.shortfall_minutes),'Ολοκληρωμένες ημέρες'],['Υπέρβαση διαλειμμάτων',formatMinutes(totals.break_excess_minutes),'Πέρα από το κοινό ημερήσιο όριο'],['Συνολική απόκλιση',formatMinutes(totals.combined_deviation_minutes),deficitLabel + ' + υπέρβαση διαλειμμάτων']];
+  return '<div class="attendance-summary-label">Σύνολα μήνα' + (pending ? ' <span class="badge amber">Προσωρινά</span>' : '') + '</div><div class="attendance-summary">' + metrics.map(function(metric,index) { return '<div class="attendance-summary-item' + (index > 2 ? ' attendance-summary-deviation' : '') + '"><span>' + metric[0] + '</span><strong class="mono' + (index > 2 && Number([totals.shortfall_minutes,totals.break_excess_minutes,totals.combined_deviation_minutes][index-3]) > 0 ? ' attendance-negative' : '') + '">' + metric[1] + '</strong><small>' + metric[2] + '</small></div>'; }).join('') + '</div>';
 }
 function renderStats() {
   const data = state.monthData, readOnly = isArchiveView('stats'), canEdit = isAdmin() && !readOnly;
-  state.stats = data && state.statsId ? monthlyStats(data.events || [], {month: state.month, employee: data.employee, notes: data.notes || [], settings: data.settings || state.context.settings, now: now(), includePending: state.statsMode === 'effective'}) : null;
-  const stats = state.stats;
-  const projected = data && state.statsId ? monthlyStats(data.events || [], {month: state.month, employee: data.employee, notes: data.notes || [], settings: data.settings || state.context.settings, now: now(), includePending: state.statsMode === 'effective', includeScheduled: true}) : null;
-  const previewDays = new Map((projected?.days || []).map(function(day) { return [day.date, day]; }));
-  const rawEvents = data?.events || [], rawById = new Map(rawEvents.map(function(e) { return [String(e.id), e]; }));
+  const options = {month:state.month,employee:data?.employee,notes:data?.notes || [],settings:data?.settings || state.context.settings,now:now(),includePending:state.statsMode === 'effective'};
+  state.stats = data && state.statsId ? monthlyStats(data.events || [], options) : null;
+  const stats = state.stats, projected = stats ? monthlyStats(data.events || [], {...options,includeScheduled:true}) : null;
+  const previewDays = new Map((projected?.days || []).map(function(day) { return [day.date,day]; }));
+  const rawEvents = data?.events || [], rawById = new Map(rawEvents.map(function(e) { return [String(e.id),e]; }));
   const due = readOnly ? [] : rawEvents.filter(isScheduledEvent).map(function(e) { return Date.parse(e.event_at); });
+  if (!readOnly) for (const day of stats?.days || []) {
+    const deadline = Date.parse(day.scheduled_end_at);
+    if (day.shifts.length && !day.evaluation_complete && deadline > now().getTime()) due.push(deadline);
+  }
   state.nextScheduledRefresh = due.length ? Math.min(...due) : 0;
-  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(state.month) ? state.month : today().slice(0, 7);
-  const totals = stats?.totals || {};
-  const summary = '<tr class="attendance-month-totals"><th scope="row">ΣΥΝΟΛΑ ΜΗΝΑ</th><td></td><td colspan="2"></td><td class="mono">' + esc(statsHours(totals.gross_minutes)) + '</td><td class="mono">' + esc(statsHours(totals.variance_minutes, true)) + '</td><td colspan="6"></td><td class="mono">' + esc(statsMinuteText(totals.break_minutes)) + '</td><td class="mono">' + esc(statsMinuteText(totals.break_excess_minutes)) + '</td><td class="mono">' + esc(statsMinuteText(totals.late_minutes)) + '</td></tr>';
-  return heading('Παρουσιολόγιο', 'Μηνιαία παρουσία · οι ώρες περιλαμβάνουν τα διαλείμματα.', button('Εξαγωγή CSV', 'export-stats', stats ? '' : 'disabled')) +
-    '<section class="card attendance-card"><div class="card-heading"><h2>📊 Μηνιαία Παρουσία</h2></div><div class="attendance-period-filters">' +
-    selectField('Μήνας', 'stats_month_number', STATS_MONTHS.map(function(name, index) { return option(String(index + 1).padStart(2, '0'), name, month.slice(5)); }).join('')) +
-    selectField('Έτος', 'stats_year', statsYears().map(function(year) { return option(year, year, month.slice(0, 4)); }).join('')) + '</div>' +
-    statsEmployeeTiles() + '<div class="filter-row attendance-options">' + datasetField('stats') + selectField('Υπολογισμός', 'stats_mode', option('effective', 'Μαζί με τις εκκρεμείς διορθώσεις', state.statsMode) + option('approved', 'Μόνο εγκεκριμένες καταγραφές', state.statsMode)) + '</div>' +
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(state.month) ? state.month : today().slice(0,7);
+  const days = stats?.days || [], attention = days.filter(function(day) { return statsNeedsAttention(day,rawEvents); });
+  const visibleDays = days.filter(function(day) { return state.statsFilter === 'attention' ? statsNeedsAttention(day,rawEvents) : state.statsFilter === 'present' ? statsHasPresence(day,previewDays.get(day.date) || day) : true; });
+  if (stats && state.statsSelectionScope !== statsScope()) {
+    state.statsSelectionScope = statsScope();
+    state.statsSelectedDay = (visibleDays.find(function(day) { return statsHasPresence(day,previewDays.get(day.date) || day) || statsDayDrafts(day,rawEvents).length; }) || visibleDays.find(function(day) { return day.date === today(); }) || visibleDays[0])?.date || '';
+  }
+  if (state.statsSelectedDay && !visibleDays.some(function(day) { return day.date === state.statsSelectedDay; })) state.statsSelectedDay = visibleDays[0]?.date || '';
+  const selectedDay = days.find(function(day) { return day.date === state.statsSelectedDay; });
+  const person = data?.employee || employee(state.statsId), entryDate = selectedDay?.date || (today().startsWith(month) ? today() : month + '-01');
+  const breakLimit = options.settings?.break_limit_minutes ?? 30;
+  return heading('Παρουσιολόγιο','Η ομάδα σου, κάθε ημέρα με μια ματιά.',button('Εξαγωγή CSV','export-stats',stats ? '' : 'disabled')) +
+    '<div class="attendance-workspace">' + statsPeoplePanel() + '<section class="attendance-report" aria-label="Μηνιαία παρουσία"><div class="attendance-report-heading"><div class="attendance-report-person">' + (person ? avatar(person) : '') + '<div><span class="attendance-kicker">Μηνιαία παρουσία</span><h2>' + esc(person?.name || 'Επίλεξε εργαζόμενο') + '</h2><p>' + esc(person?.department || 'Παρουσίες και διαλείμματα') + (person?.archived ? ' · Αρχειοθετημένος' : '') + '</p></div></div>' +
+    (canEdit && person ? button('+ Καταγραφή','admin-day','data-employee="' + esc(state.statsId) + '" data-date="' + esc(entryDate) + '"','primary') : '') + '</div>' +
+    '<div class="attendance-period-bar"><button type="button" class="icon-button" data-action="stats-shift-month" data-offset="-1" aria-label="Προηγούμενος μήνας">‹</button>' +
+    selectField('Μήνας','stats_month_number',STATS_MONTHS.map(function(name,index) { return option(String(index+1).padStart(2,'0'),name,month.slice(5)); }).join('')) +
+    selectField('Έτος','stats_year',statsYears().map(function(year) { return option(year,year,month.slice(0,4)); }).join('')) +
+    '<button type="button" class="icon-button" data-action="stats-shift-month" data-offset="1" aria-label="Επόμενος μήνας">›</button></div>' +
+    '<div class="attendance-options">' + datasetField('stats') + selectField('Υπολογισμός','stats_mode',option('effective','Μαζί με τις εκκρεμείς διορθώσεις',state.statsMode) + option('approved','Μόνο εγκεκριμένες καταγραφές',state.statsMode)) + '</div>' +
     (readOnly ? archiveNotice() : '') +
-    (stats?.has_pending && state.statsMode === 'effective' ? banner('Τα σύνολα περιλαμβάνουν εκκρεμείς διορθώσεις και παραμένουν προσωρινά μέχρι να ελεγχθούν.', 'warning') : '') +
+    (stats?.has_pending && state.statsMode === 'effective' ? banner('Τα σύνολα περιλαμβάνουν εκκρεμείς διορθώσεις και παραμένουν προσωρινά μέχρι να ελεγχθούν.','warning') : '') +
     (projected?.has_scheduled ? banner('Οι ορισμένες μελλοντικές ώρες εμφανίζονται με μπλε ένδειξη. Θα ισχύσουν όταν φτάσει η ώρα τους και δεν προστίθενται πρόωρα στα σημερινά σύνολα.') : '') +
+    (stats?.issues?.length ? banner('Υπάρχουν κινήσεις που χρειάζονται έλεγχο. Επίλεξε «Χρειάζονται έλεγχο» για να τις δεις.','warning') : '') +
     (rawEvents.some(function(e) { return e.source === 'history_cleanup'; }) ? '<p class="field-help">* Εκτιμώμενη παλιά ώρα που συμπληρώθηκε κατά την τακτοποίηση του ιστορικού.</p>' : '') +
-    (stats?.issues?.length ? banner('Υπάρχουν κινήσεις που χρειάζονται έλεγχο. Οι ακολουθίες που δεν ολοκληρώνονται σωστά δεν υπολογίζονται ως πλήρης παρουσία.', 'warning') : '') +
-    (stats ? '<div class="table-wrap attendance-table-wrap" tabindex="0" aria-label="Μηνιαίο παρουσιολόγιο, κύλιση οριζόντια αν χρειάζεται"><table class="attendance-table"><thead>' + statsHeaderRows() + '</thead><tbody>' +
-      stats.days.map(function(day) { return statsDayRows(day, previewDays.get(day.date) || day, rawEvents, rawById, canEdit); }).join('') +
-      '</tbody><tfoot>' + statsHeaderRows() + summary + '</tfoot></table></div>' : empty(state.statsId ? 'Επίλεξε μήνα και εργαζόμενο' : 'Δεν υπάρχουν επιλεγμένοι εργαζόμενοι', state.statsId ? 'Τα σύνολα θα εμφανιστούν εδώ.' : 'Πρόσθεσε προσωπικό ή επίλεξε εμφάνιση αρχειοθετημένων.')) +
-    '</section><p class="footer-note">Ημερολογιακή κατανομή σε ώρα Ελλάδας · οι νυχτερινές παρουσίες συνδέονται μεταξύ ημερών. Η διαφορά από τον στόχο δεν αποτελεί υπολογισμό νόμιμης υπερωρίας.</p>';
+    (stats ? statsSummary(stats.totals,stats.has_pending && state.statsMode === 'effective',options.settings?.shift_target_minutes ?? 480) + '<div class="attendance-table-toolbar"><div class="attendance-row-filters" role="group" aria-label="Φίλτρο ημερών">' + [['all','Όλες',days.length],['present','Με παρουσία',days.filter(function(d) { return statsHasPresence(d,previewDays.get(d.date) || d); }).length],['attention','Χρειάζονται έλεγχο',attention.length]].map(function(item) { return '<button type="button" data-action="stats-filter-days" data-filter="' + item[0] + '" aria-pressed="' + (state.statsFilter === item[0]) + '">' + item[1] + ' <span>' + item[2] + '</span></button>'; }).join('') + '</div><span class="attendance-break-limit">Όριο διαλειμμάτων ' + esc(breakLimit) + 'λ / ημέρα</span></div>' +
+    (visibleDays.length ? '<div class="table-wrap attendance-table-wrap" tabindex="0" aria-label="Μηνιαίο παρουσιολόγιο"><table class="attendance-table"><thead>' + statsTableHeader() + '</thead><tbody>' + visibleDays.map(function(day) { return statsDayRow(day,previewDays.get(day.date) || day,rawEvents); }).join('') + '</tbody><tfoot>' + statsTableHeader() + '<tr class="attendance-month-totals"><th scope="row">Σύνολα μήνα</th><td>' + stats.totals.worked_days + ' ημέρες</td><td class="mono">' + esc(formatMinutes(stats.totals.break_minutes)) + '</td><td class="mono">' + esc(formatMinutes(stats.totals.gross_minutes)) + '</td><td><small>Συνολική απόκλιση</small><strong class="mono' + (stats.totals.combined_deviation_minutes ? ' attendance-negative' : '') + '">' + esc(formatMinutes(stats.totals.combined_deviation_minutes)) + '</strong></td></tr></tfoot></table></div><p class="attendance-table-hint">Επίλεξε μια ημέρα για όλες τις καταγραφές και τις σημειώσεις της.</p>' : empty('Δεν υπάρχουν ημέρες με αυτό το φίλτρο','Επίλεξε «Όλες» για να δεις ολόκληρο τον μήνα.')) : empty('Επίλεξε μήνα και εργαζόμενο','Τα σύνολα και οι καθημερινές καταγραφές θα εμφανιστούν εδώ.')) +
+    '</section>' + statsDayPanel(selectedDay,previewDays.get(selectedDay?.date) || selectedDay,rawEvents,rawById,canEdit) + '</div><p class="footer-note">Ημερολογιακή κατανομή σε ώρα Ελλάδας · οι νυχτερινές παρουσίες συνδέονται μεταξύ ημερών. Η διαφορά από τον στόχο δεν αποτελεί υπολογισμό νόμιμης υπερωρίας.</p>';
 }
 function renderEmployees() {
   const rows = (state.context?.employees || []).filter(function(e) { return state.showArchived || !e.archived; });
   return heading('Προσωπικό', 'Η ομάδα, τα τμήματα και οι ατομικές ρυθμίσεις ωραρίου.', isAdmin() ? button('Προσθήκη εργαζομένου', 'edit-employee', '', 'primary') : '') +
     '<section class="card"><div class="card-heading"><h2>' + rows.length + ' εργαζόμενοι</h2><label class="check-label"><input id="show-archived" type="checkbox"' + (state.showArchived ? ' checked' : '') + '>Εμφάνιση αρχείου</label></div>' +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Ωράρια</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Προσέλευση</th><th>Αποχώρηση</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
       rows.map(function(e) {
-        return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +
+        return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td class="mono">' + esc(e.shift_end ? clockText(e.shift_end) : '—') + '</td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +
           (isAdmin() ? button('Επεξεργασία', 'edit-employee', 'data-id="' + esc(e.id) + '"', 'small') + button(e.archived ? 'Επαναφορά' : 'Αρχειοθέτηση', 'archive-employee', 'data-id="' + esc(e.id) + '" data-archived="' + !e.archived + '" data-mutate', 'small') : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'small')) + '</div></td></tr>';
       }).join('') + '</tbody></table></div>' : empty('Δεν υπάρχει προσωπικό', 'Πρόσθεσε τους εργαζομένους για να ξεκινήσουν οι καταγραφές.')) + '</section>';
 }
@@ -1463,10 +1493,11 @@ function openEmployee(id) {
     '<datalist id="departments">' + departments.map(function(d) { return '<option value="' + esc(d) + '"></option>'; }).join('') + '</datalist>' +
     field('Χρώμα', 'color', /^#[0-9a-f]{6}$/i.test(e.color || '') ? e.color : '#2d8d7a', 'color') +
     field('Σειρά εμφάνισης', 'sort_order', e.sort_order ?? 0, 'number', 'min="0" max="100000" required') +
-    field('Έναρξη πρώτου ωραρίου', 'shift1_start', e.shift1_start?.slice(0, 5) || '', 'time') +
-    field('Έναρξη δεύτερου ωραρίου', 'shift2_start', e.shift2_start?.slice(0, 5) || '', 'time') +
+    field('Ώρα προσέλευσης', 'shift1_start', e.shift1_start?.slice(0, 5) || '', 'time') +
+    field('Ώρα αποχώρησης', 'shift_end', e.shift_end?.slice(0, 5) || '', 'time') +
+    field('Δεύτερη προσέλευση · προαιρετική', 'shift2_start', e.shift2_start?.slice(0, 5) || '', 'time') +
     field('Ανοχή καθυστέρησης · λεπτά', 'lateness_tolerance_minutes', e.lateness_tolerance_minutes || 0, 'number', 'min="0" max="240" required') + '</div>';
-  openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Τα ωράρια χρησιμοποιούνται για τον υπολογισμό καθυστέρησης.', body, submitButton('Αποθήκευση'), 'employee');
+  openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Οι ώρες χρησιμοποιούνται για τις ενδείξεις αργοπορίας και πρόωρης αποχώρησης.', body, submitButton('Αποθήκευση'), 'employee');
 }
 function openVoid(ids) {
   if (!isAdmin() || isArchiveView() || !ids.length) return;
@@ -1592,15 +1623,32 @@ async function handleAction(action, node) {
     const id = String(node.dataset.id || '');
     const person = (state.context.employees || []).find(function(e) { return String(e.id) === id; });
     if (!person || (person.archived && !state.statsShowArchived && String(state.statsId) !== id) || String(state.statsId) === id) return;
-    state.statsId = person.id; state.statsExpandedBreakDays = {};
+    state.statsId = person.id; state.statsSelectedDay = ''; state.statsSelectionScope = '';
     await loadView('stats'); return;
   }
-  if (action === 'stats-toggle-breaks') {
-    if (!['admin', 'reviewer'].includes(state.context.role) || state.view !== 'stats' || !/^\d{4}-\d{2}-\d{2}$/.test(node.dataset.date || '')) return;
-    const date = node.dataset.date;
-    if (!state.stats?.days?.some(function(day) { return day.date === date; })) return;
-    const key = statsBreakExpansionKey(date);
-    state.statsExpandedBreakDays[key] = !state.statsExpandedBreakDays[key]; renderCurrentView(); return;
+  if (action === 'stats-select-day' || action === 'stats-close-day' || action === 'stats-filter-days' || action === 'stats-shift-month') {
+    if (!['admin', 'reviewer'].includes(state.context.role) || state.view !== 'stats') return;
+    if (action === 'stats-shift-month') {
+      const offset = Number(node.dataset.offset); if (![-1, 1].includes(offset)) return;
+      const [year, month] = state.month.split('-').map(Number);
+      const next = new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 7);
+      if (next < '2000-01' || next > '9999-12') return;
+      state.month = next; state.statsSelectedDay = ''; state.statsSelectionScope = ''; await loadView('stats'); return;
+    }
+    if (action === 'stats-filter-days') {
+      if (!['all', 'present', 'attention'].includes(node.dataset.filter)) return;
+      state.statsFilter = node.dataset.filter;
+    } else if (action === 'stats-close-day') state.statsSelectedDay = '';
+    else {
+      if (!state.stats?.days.some(function(day) { return day.date === node.dataset.date; })) return;
+      state.statsSelectedDay = node.dataset.date;
+    }
+    renderCurrentView();
+    if (action === 'stats-select-day') {
+      const panel = document.getElementById('attendance-day-detail'); panel?.focus?.({preventScroll:true});
+      if (window.matchMedia?.('(max-width:1100px)').matches) panel?.scrollIntoView?.({behavior:'smooth',block:'start'});
+    }
+    return;
   }
   if (action === 'kiosk-home') { closeModal(); await refreshApp(); return; }
   if (action === 'browser-list-refresh') { await refreshBrowserList(); return; }
@@ -1804,6 +1852,7 @@ async function handleModalForm(form, decision) {
         name: f.name.value.trim(), department: f.department.value.trim(), color: f.color.value,
         sort_order: Number(f.sort_order.value),
         shift1_start: f.shift1_start.value ? normalizeTime(f.shift1_start.value) : null, shift2_start: f.shift2_start.value ? normalizeTime(f.shift2_start.value) : null,
+        shift_end: f.shift_end?.value ? normalizeTime(f.shift_end.value) : null,
         lateness_tolerance_minutes: Number(f.lateness_tolerance_minutes.value)
       };
       if (state.modalEmployeeId) payload.id = state.modalEmployeeId;
@@ -1865,7 +1914,7 @@ async function handleChange(target) {
       state.historyFrom = target.value === 'archive' && state.context.history_archive.from ? dateKey(state.context.history_archive.from) : today().slice(0, 7) + '-01';
       state.historyTo = target.value === 'archive' && state.context.history_archive.to ? dateKey(state.context.history_archive.to) : today();
     } else {
-      state.statsDataset = target.value; state.monthData = null; state.stats = null; state.statsExpandedBreakDays = {}; state.nextScheduledRefresh = 0;
+      state.statsDataset = target.value; state.monthData = null; state.stats = null; state.statsSelectedDay = ''; state.statsSelectionScope = ''; state.nextScheduledRefresh = 0;
       const range = state.context.history_archive;
       if (target.value === 'archive' && range.to && (!state.month || state.month > dateKey(range.to).slice(0, 7) || (range.from && state.month < dateKey(range.from).slice(0, 7)))) state.month = dateKey(range.to).slice(0, 7);
     }
@@ -1878,6 +1927,7 @@ async function handleChange(target) {
   if (target.name === 'history_type') { state.historyType = target.value; renderCurrentView(); return; }
   if (target.name === 'request_status') { state.requestStatus = target.value; await loadView('requests'); return; }
   if (target.name === 'request_employee') { state.requestEmployee = target.value; await loadView('requests'); return; }
+  if (target.name === 'stats_department') { state.statsDepartment = target.value; renderCurrentView(); return; }
   if (target.name === 'stats_show_archived') { state.statsShowArchived = Boolean(target.checked); renderCurrentView(); return; }
   if (target.name === 'stats_month_number' || target.name === 'stats_year') {
     const current = /^\d{4}-(0[1-9]|1[0-2])$/.test(state.month) ? state.month : today().slice(0, 7);
@@ -1886,10 +1936,10 @@ async function handleChange(target) {
     if (!/^(?:[2-9]\d{3})$/.test(year) || !/^(0[1-9]|1[0-2])$/.test(month)) return;
     const next = year + '-' + month;
     if (next === state.month) return;
-    state.month = next; state.statsExpandedBreakDays = {}; await loadView('stats'); return;
+    state.month = next; state.statsSelectedDay = ''; state.statsSelectionScope = ''; await loadView('stats'); return;
   }
-  if (target.name === 'stats_employee') { state.statsId = target.value; state.statsExpandedBreakDays = {}; await loadView('stats'); return; }
-  if (target.name === 'stats_month' && /^\d{4}-\d{2}$/.test(target.value)) { state.month = target.value; state.statsExpandedBreakDays = {}; await loadView('stats'); return; }
+  if (target.name === 'stats_employee') { state.statsId = target.value; state.statsSelectedDay = ''; state.statsSelectionScope = ''; await loadView('stats'); return; }
+  if (target.name === 'stats_month' && /^\d{4}-\d{2}$/.test(target.value)) { state.month = target.value; state.statsSelectedDay = ''; state.statsSelectionScope = ''; await loadView('stats'); return; }
   if (target.name === 'stats_mode') { state.statsMode = target.value; renderCurrentView(); }
 }
 function tick() {
@@ -1917,7 +1967,12 @@ function tick() {
 document.addEventListener('click', function(event) {
   if (event.target.closest?.('a.kiosk-admin-link') && state.busy) { event.preventDefault(); return; }
   const node = event.target.closest?.('button[data-action]');
-  if (!node || node.disabled) return;
+  if (!node) {
+    const row = event.target.closest?.('[data-stats-day]');
+    if (row) Promise.resolve(handleAction('stats-select-day', {dataset:{date:row.dataset.statsDay}})).catch(function(error) { toast(error.message, 'error'); });
+    return;
+  }
+  if (node.disabled) return;
   event.preventDefault();
   Promise.resolve(handleAction(node.dataset.action, node)).catch(function(error) { toast(error.message || 'Η ενέργεια δεν ολοκληρώθηκε.', 'error'); });
 });
@@ -1937,6 +1992,10 @@ document.addEventListener('input', function(event) {
   if (event.target.id === 'employee-search') {
     state.search = event.target.value;
     const grid = document.getElementById('employee-grid'); if (grid) { grid.innerHTML = employeeGrid(); colorAvatars(); }
+  }
+  if (event.target.id === 'attendance-search') {
+    state.statsSearch = event.target.value;
+    const list = document.getElementById('attendance-employee-list'); if (list) { list.innerHTML = statsEmployeeList(); colorAvatars(); }
   }
   if (event.target.dataset.dst) updateDstChoices(modal);
 });

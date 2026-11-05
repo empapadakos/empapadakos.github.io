@@ -1,7 +1,7 @@
 {
-  "version": "2.5.0",
+  "version": "2.6.0",
   "name": "Time Tracker v2",
-  "sourceCommit": "dd1551a9873f34952e338898af0e0fcab9245e25",
+  "sourceCommit": "1551e1a3fca3cf69ecadebc04f5bef1acff5e8a6",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",
@@ -15,7 +15,8 @@
     "time_tracker_next_attendance_maintenance",
     "time_tracker_next_historical_archive",
     "time_tracker_next_settings_singleton_where",
-    "time_tracker_next_multiple_work_periods"
+    "time_tracker_next_multiple_work_periods",
+    "time_tracker_next_employee_shift_end"
   ],
   "accountService": "ttn-manage-accounts",
   "terminalService": "ttn-terminal"

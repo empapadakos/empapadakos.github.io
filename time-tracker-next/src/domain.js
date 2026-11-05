@@ -185,6 +185,30 @@ function lateness(shift,employee,timeZone,index) {
   return {late_minutes:Math.max(0,actual-preferred-tolerance),scheduled_start:`${pad(Math.floor(preferred/60))}:${pad(preferred%60)}`};
 }
 
+// Presentation-only deviations. Whole work periods are charged to their start
+// date for the daily target, so an overnight period is never charged twice.
+function attendanceDeviation(key, periods, employee, target, breakExcess, issues, current, timeZone) {
+  const first=periods[0],last=periods.at(-1);
+  let expectedEnd=null;
+  const endMinutes=scheduleMinutes(employee?.shift_end);
+  if(first&&endMinutes!==null){
+    const startMinutes=scheduleMinutes(employee?.shift1_start)??scheduleMinutes(formatTime(first.start_at,{timeZone}));
+    const endDate=endMinutes<=startMinutes?addDateDays(key,1):key;
+    const candidates=possibleInstants(endDate,`${pad(Math.floor(endMinutes/60))}:${pad(endMinutes%60)}`,timeZone);
+    expectedEnd=candidates.length?instant(candidates.at(-1)):null;
+  }
+  const complete=periods.length>0&&current!==null&&issues.length===0&&
+    periods.every(s=>s.end_at&&instant(s.end_at)<=current)&&
+    (expectedEnd===null||current>=expectedEnd);
+  const presence=periods.reduce((sum,s)=>sum+(s.end_at?Math.max(0,instant(s.end_at)-instant(s.start_at))/60000:0),0);
+  const shortfall=complete?Math.max(0,Math.round(target-presence)):0;
+  const early=complete&&expectedEnd!==null?Math.max(0,Math.round((expectedEnd-instant(last.end_at))/60000)):0;
+  return {evaluation_complete:complete,evaluation_minutes:presence,shortfall_minutes:shortfall,
+    early_departure_minutes:early,scheduled_end_at:expectedEnd===null?null:new Date(expectedEnd).toISOString(),
+    final_departure_id:last?.end_event?.id??null,
+    combined_deviation_minutes:shortfall+Math.max(0,Math.round(breakExcess))};
+}
+
 /** Calendar-day report. Gross presence includes breaks; open intervals are estimated separately. */
 export function monthlyStats(events,{month,employee={},notes=[],settings={},now=new Date(),includePending=true,includeScheduled=false,timeZone=TIMEZONE}={}) {
   timeZone=settings.timezone||timeZone;
@@ -224,9 +248,11 @@ export function monthlyStats(events,{month,employee={},notes=[],settings={},now=
       dayShifts.push({id:shift.id,start_at:shift.start_at,end_at:shift.end_at,start_id:shift.start_event?.id??null,end_id:shift.end_event?.id??null,start_text:formatTime(shift.start_at,{timeZone}),end_text:formatTime(shift.end_at,{timeZone}),gross_minutes:duration,breaks:dayBreaks,pending:shift.pending,closed,carried_in:start<low,carried_out:visibleEnd>high,...timing});
     }
     const targetMinutes=(startsByDay[key]?.length||0)>0?target:0;
-    return {date:key,weekday:new Date(`${key}T12:00:00Z`).getUTCDay(),shifts:dayShifts,gross_minutes:gross,break_minutes:breakMinutes,break_count:breakCount,break_excess_minutes:Math.max(0,breakMinutes-breakLimit),late_minutes:late,target_minutes:targetMinutes,variance_minutes:gross-targetMinutes,pending_count:pendingByDay[key]||0,note:noteMap.get(key)||null,has_open_shift:dayShifts.some(s=>!s.closed),has_open_break:dayShifts.some(s=>s.breaks.some(b=>!b.closed)),estimated_open_minutes:estimatedOpen,estimated_open_break_minutes:estimatedBreak,issues:result.issues.filter(i=>instant(i.event_at)!==null&&dateKey(i.event_at,timeZone)===key)};
+    const dayIssues=result.issues.filter(i=>instant(i.event_at)!==null&&dateKey(i.event_at,timeZone)===key);
+    const deviation=attendanceDeviation(key,startsByDay[key]||[],employee,target,Math.max(0,breakMinutes-breakLimit),dayIssues,current,timeZone);
+    return {...deviation,date:key,weekday:new Date(`${key}T12:00:00Z`).getUTCDay(),shifts:dayShifts,gross_minutes:gross,break_minutes:breakMinutes,break_count:breakCount,break_excess_minutes:Math.max(0,breakMinutes-breakLimit),late_minutes:late,target_minutes:targetMinutes,variance_minutes:gross-targetMinutes,pending_count:pendingByDay[key]||0,note:noteMap.get(key)||null,has_open_shift:dayShifts.some(s=>!s.closed),has_open_break:dayShifts.some(s=>s.breaks.some(b=>!b.closed)),estimated_open_minutes:estimatedOpen,estimated_open_break_minutes:estimatedBreak,issues:dayIssues};
   });
-  const totals={gross_minutes:0,break_minutes:0,break_count:0,break_excess_minutes:0,late_minutes:0,target_minutes:0,variance_minutes:0,worked_days:0,pending_count:0,estimated_open_minutes:0};
-  for(const day of days){for(const key of ['gross_minutes','break_minutes','break_count','break_excess_minutes','late_minutes','target_minutes','variance_minutes','pending_count','estimated_open_minutes'])totals[key]+=day[key];if(day.gross_minutes>0)totals.worked_days++;}
+  const totals={gross_minutes:0,break_minutes:0,break_count:0,break_excess_minutes:0,late_minutes:0,target_minutes:0,variance_minutes:0,worked_days:0,pending_count:0,estimated_open_minutes:0,shortfall_minutes:0,combined_deviation_minutes:0,early_departure_minutes:0};
+  for(const day of days){for(const key of ['gross_minutes','break_minutes','break_count','break_excess_minutes','late_minutes','target_minutes','variance_minutes','pending_count','estimated_open_minutes','shortfall_minutes','combined_deviation_minutes','early_departure_minutes'])totals[key]+=day[key];if(day.gross_minutes>0)totals.worked_days++;}
   return {month,timeZone,employee_id:employee.id??null,includePending,includeScheduled,days,totals,issues:result.issues,state:result,has_scheduled:result.scheduled_events.some(e=>keySet.has(dateKey(e.event_at,timeZone))),has_pending:result.timeline.some(e=>e.status==='pending'&&instant(e.event_at)!==null&&keySet.has(dateKey(e.event_at,timeZone)))};
 }

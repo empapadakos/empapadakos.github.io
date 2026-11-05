@@ -1,12 +1,16 @@
 {
-  "version": "1.2.0",
-  "sourceCommit": "1625a69ff40b7527236dc348f5bd957452337786",
+  "version": "1.3.0",
+  "sourceCommit": "94aca828e67d0f20a8b222d34e46b0756439d42f",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",
     "time_tracker_next_admin_times",
     "time_tracker_next_admin_receipts_read_consistency",
-    "time_tracker_next_device_accounts"
+    "time_tracker_next_device_accounts",
+    "time_tracker_next_legacy_import",
+    "time_tracker_next_browser_approval",
+    "time_tracker_next_terminal_housekeeping"
   ],
-  "accountService": "ttn-manage-accounts"
+  "accountService": "ttn-manage-accounts",
+  "terminalService": "ttn-terminal"
 }

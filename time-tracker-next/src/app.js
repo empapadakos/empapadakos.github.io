@@ -135,7 +135,7 @@ function heading(title, description, actions = '') {
 function button(label, action, extra = '', classes = '') { return '<button type="button" class="button ' + classes + '" data-action="' + esc(action) + '" ' + extra + '>' + esc(label) + '</button>'; }
 function field(label, name, value = '', type = 'text', extra = '') {
   if (type === 'time') {
-    return '<div class="field"><label for="f-' + esc(name) + '">' + esc(label.replace(' Αθήνας', '')) + '</label><input id="f-' + esc(name) + '" name="' + esc(name) + '" type="text" class="time-input mono" data-time-input inputmode="numeric" autocomplete="off" placeholder="21.00" maxlength="5" pattern="([01][0-9]|2[0-3])[.][0-5][0-9]" title="24ωρη μορφή ώρας και λεπτών, π.χ. 21.00" value="' + esc(clockText(value)) + '" ' + extra.replace(/\bstep="[^"]*"/g, '') + '></div>';
+    return '<div class="field"><label for="f-' + esc(name) + '">' + esc(label.replace(' Αθήνας', '')) + '</label><input id="f-' + esc(name) + '" name="' + esc(name) + '" type="text" class="time-input mono" data-time-input inputmode="numeric" autocomplete="off" placeholder="ΩΩ.ΛΛ" maxlength="5" pattern="([01][0-9]|2[0-3])[.][0-5][0-9]" title="24ωρη μορφή ώρας και λεπτών: ΩΩ.ΛΛ" value="' + esc(clockText(value)) + '" ' + extra.replace(/\bstep="[^"]*"/g, '') + '></div>';
   }
   return '<div class="field"><label for="f-' + esc(name) + '">' + esc(label) + '</label><input id="f-' + esc(name) + '" name="' + esc(name) + '" type="' + esc(type) + '" value="' + esc(value) + '" ' + extra + '></div>';
 }
@@ -610,10 +610,10 @@ function renderHistory() {
 }
 function renderRequests() {
   const rows = state.requests?.events || [];
-  return heading('Διορθώσεις', 'Έλεγξε τις προτεινόμενες κινήσεις και την ακολουθία στην οποία ανήκουν.') +
+  return heading('Διορθώσεις', 'Έλεγξε τις δηλωμένες κινήσεις και την ακολουθία στην οποία ανήκουν.') +
     '<section class="card"><div class="filter-row">' + selectField('Κατάσταση', 'request_status', option('', 'Όλες', state.requestStatus) + Object.entries(STATUS).filter(function(p) { return p[0] !== 'void'; }).map(function(p) { return option(p[0], p[1], state.requestStatus); }).join('')) +
     selectField('Εργαζόμενος', 'request_employee', employeeOptions(state.requestEmployee, true)) + '</div>' +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Ενέργεια</th><th>Προτεινόμενη ώρα</th><th>Αίτημα</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' + rows.map(function(ev) {
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Ενέργεια</th><th>Δηλωμένη ώρα</th><th>Αίτημα</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' + rows.map(function(ev) {
       return '<tr><td><strong>' + esc(ev.employee_name || personName(ev.employee_id)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td class="mono">' + esc(displayDate(ev.event_at)) + '<br>' + esc(displayTime(ev.event_at, true)) + '</td><td class="wrap">' + esc(ev.reason || '—') + '<small class="shift-line">' + esc(displayDate(ev.created_at)) + ' ' + esc(displayTime(ev.created_at)) + '</small></td><td>' + statusBadge(ev.status) + '</td><td>' +
         (ev.status === 'pending' && isAdmin() ? button('Έλεγχος', 'review-event', 'data-id="' + esc(ev.id) + '"', 'small primary') : button('Ιστορικό', 'person-history', 'data-id="' + esc(ev.employee_id) + '"', 'small')) + '</td></tr>';
     }).join('') + '</tbody></table></div>' : empty('Η λίστα είναι καθαρή', 'Δεν υπάρχουν αιτήματα με τα επιλεγμένα φίλτρα.')) + '</section>';
@@ -1019,43 +1019,6 @@ function suggestionFrom(error, fallbackState, type) {
   const current = details.state && typeof details.state === 'object' ? details.state : fallbackState;
   return correctionSuggestionForState(current, type, details);
 }
-function correctionBounds(suggestion) {
-  if (suggestion?.issue) return {after: suggestion.issue.repair_after_at, before: suggestion.issue.repair_before_at};
-  return suggestion?.requestedAction ? {after: suggestion.current?.open_break_at || suggestion.current?.open_shift_at, before: now().toISOString()} : {};
-}
-function correctionGapText(suggestion) {
-  const bounds = correctionBounds(suggestion);
-  const after = bounds.after;
-  const before = bounds.before;
-  const stamp = function(at) { return displayDate(at) + ' στις ' + displayTime(at, true); };
-  if (after && before) return 'Η κίνηση που λείπει πρέπει να βρίσκεται από ' + stamp(after) + ' έως ' + stamp(before) + '. Συμπλήρωσε την πραγματική ώρα.';
-  if (before) return 'Η κίνηση που λείπει πρέπει να έχει γίνει έως ' + stamp(before) + '. Συμπλήρωσε την πραγματική ώρα.';
-  if (after) return 'Η κίνηση που λείπει πρέπει να έχει γίνει από ' + stamp(after) + ' και μετά. Συμπλήρωσε την πραγματική ώρα.';
-  return 'Συμπλήρωσε την πραγματική ώρα της κίνησης που λείπει.';
-}
-function correctionContextHtml(suggestion) {
-  if (!suggestion?.issue) return '';
-  const issue = suggestion.issue;
-  let html = '<p>' + esc(correctionGapText(suggestion)) + '</p>';
-  const interval = Date.parse(issue.repair_before_at) - Date.parse(issue.repair_after_at);
-  if (issue.type === 'clock_in' && suggestion.actions.includes('clock_out') && interval >= 0 && interval <= 60000) {
-    html += '<p>Οι δύο καταγραφές απέχουν πολύ λίγο. Αν πρόκειται για διπλό χτύπημα, χρειάζεται έλεγχος από τον διαχειριστή.</p>';
-  }
-  return banner(html, 'warning');
-}
-function correctionNeedsAdminTimingReview(suggestion) {
-  const bounds = correctionBounds(suggestion);
-  const after = correctionLowerBound(bounds.after);
-  const before = Date.parse(bounds.before);
-  return Number.isFinite(after) && Number.isFinite(before) && Math.ceil(after / 60000) * 60000 > Math.floor(before / 60000) * 60000;
-}
-function correctionLowerBound(value) {
-  const at = Date.parse(value);
-  const fraction = String(value || '').match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/i)?.[1];
-  // Native Date truncates PostgreSQL microseconds; a whole minute before a
-  // nonzero fraction is outside the interval even when both parse to one ms.
-  return at % 60000 === 0 && fraction && /[1-9]/.test(fraction) ? at + 1 : at;
-}
 function shortCorrectionDate(day) {
   const parts = String(day || '').split('-');
   return parts.length === 3 ? Number(parts[2]) + '/' + Number(parts[1]) + '/' + parts[0].slice(-2) : dateDisplay(day);
@@ -1082,13 +1045,10 @@ async function recordAction(type) {
     if (state.browserGate || handleBrowserGate(error)) return;
     if (error.uncertain) { if (isOperator()) closeModal(); toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
     const suggestion = suggestionFrom(error, stateOf(state.employeeData), type);
-    const detail = '<p>' + esc(error.message || 'Η ενέργεια χρειάζεται προηγούμενες κινήσεις.') + '</p>' +
-      (suggestion.actions.length ? '<p class="muted">Χρειάζονται με τη σειρά:</p><ol class="issue-list">' + suggestion.actions.map(function(a) { return '<li>' + esc(ACTIONS[a]) + '</li>'; }).join('') + '</ol>' : '') +
-      (error.details?.issues?.length ? '<ul class="issue-list">' + error.details.issues.slice(0, 5).map(function(i) { return '<li>' + esc(i.message) + '</li>'; }).join('') + '</ul>' : '') +
-      (suggestion.issue && !suggestion.actions.length ? '<p>Αυτή η εκκρεμότητα χρειάζεται έλεγχο από τον διαχειριστή.</p>' : '');
-    state.correctionSuggestion = { employeeId: id, ...suggestion };
-    const repairable = suggestion.actions.length;
-    openModal(isOperator() ? '⚠ Προσοχή' : 'Έλεγχος ακολουθίας', personName(id), detail, repairable ? button('Υποβολή διορθώσεων', 'correction-from-warning', '', 'primary') : '');
+    if (suggestion.actions.length || suggestion.issue) { openCorrection(id, suggestion); return; }
+    // Authentication, transport and quota errors are not missing punches.
+    // Keep their actual error visible instead of inventing a correction type.
+    modalError(error);
   }
 }
 function correctionEntryHtml(index, action = 'clock_in', iso = null, date = today()) {
@@ -1097,9 +1057,8 @@ function correctionEntryHtml(index, action = 'clock_in', iso = null, date = toda
 }
 function openCorrection(id, suggestion = null) {
   if (!canRecord() || !id) return;
-  if ((suggestion?.issue && !suggestion.actions?.length) || (suggestion?.actions?.length && correctionNeedsAdminTimingReview(suggestion))) {
-    const message = correctionNeedsAdminTimingReview(suggestion) ? 'Οι καταγραφές είναι πολύ κοντά μεταξύ τους. Αν πρόκειται για διπλό χτύπημα, χρειάζεται έλεγχος από τον διαχειριστή, ώστε να μη δηλωθεί λανθασμένη ώρα.' : (suggestion.issue?.message || 'Αυτή η καταγραφή χρειάζεται έλεγχο από τον διαχειριστή.');
-    openModal('Χρειάζεται έλεγχος διαχειριστή', personName(id), (suggestion.notice ? banner(esc(suggestion.notice), 'success') : '') + banner(esc(message), 'warning'), '');
+  if (suggestion?.issue && !suggestion.actions?.length) {
+    openModal('Χρειάζεται έλεγχος ιστορικού', personName(id), banner(esc(suggestion.issue.message || 'Η υπάρχουσα καταγραφή χρειάζεται έλεγχο πριν προστεθεί άλλη ενέργεια.'), 'warning'), '');
     return;
   }
   const guided = isOperator() && Boolean(suggestion?.actions?.length);
@@ -1107,7 +1066,7 @@ function openCorrection(id, suggestion = null) {
   const defaultDate = suggestion?.date || today();
   state.modalEmployeeId = id; state.correctionEntryCount = actions.length;
   const body = (suggestion?.notice ? banner(esc(suggestion.notice), 'success') : '') +
-    '<div id="correction-gap-info">' + correctionContextHtml(suggestion) + '</div>' +
+    '<div id="correction-gap-info"></div>' +
     (isOperator() ? '' : banner('Καταχώρησε την πραγματική ώρα κάθε ελλείπουσας κίνησης. Η συνέχεια επιτρέπεται μόλις καλυφθούν όλες οι ελλείψεις.', '')) +
     '<div id="correction-entries">' + (guided ? guidedCorrectionEntryHtml(actions[0], defaultDate) : (isOperator() ? manualOperatorCorrectionHtml(defaultDate) : actions.map(function(action, index) { return correctionEntryHtml(index, action, null, defaultDate); }).join(''))) + '</div>' +
     (isOperator() ? '' : button('+ Προσθήκη κίνησης', 'add-correction-entry', '', 'text')) +
@@ -1127,46 +1086,21 @@ function updateGuidedCorrectionDate(form) {
   if (!timeField?.value || !dateField) return {};
   let time;
   try { time = normalizeTime(timeField.value); } catch { return {}; }
-  const bounds = correctionBounds(guidance);
-  const after = correctionLowerBound(bounds.after);
-  const before = Date.parse(bounds.before);
-  const firstDate = Number.isFinite(after) ? dateKey(new Date(after)) : guidance.date;
-  const lastDate = Number.isFinite(before) ? dateKey(new Date(before)) : guidance.date;
-  const dates = [];
-  let day = firstDate;
-  for (let i = 0; day && day <= lastDate && i < 8; i++) {
-    dates.push(day);
-    const next = new Date(day + 'T12:00:00Z'); next.setUTCDate(next.getUTCDate() + 1); day = next.toISOString().slice(0, 10);
+  // A duplicate in the raw history does not define the employee's real exit.
+  // Keep the identified shift day; only infer midnight crossing from its
+  // recorded opening, never from a later contradictory punch.
+  let date = guidance.date || dateField.value;
+  const action = guidance.actions?.[0];
+  const anchor = action === 'break_end' ? (guidance.issue?.open_break_at || guidance.current?.open_break_at) :
+    (action === 'clock_out' ? (guidance.issue?.open_shift_at || guidance.current?.open_shift_at) : null);
+  if (anchor && dateKey(anchor) === date && time < dateTimeValues(anchor).time.slice(0, 5)) {
+    const next = new Date(date + 'T12:00:00Z'); next.setUTCDate(next.getUTCDate() + 1); date = next.toISOString().slice(0, 10);
   }
-  if (day && day <= lastDate) return {error: 'Η εκκρεμότητα καλύπτει πολλές ημέρες. Χρειάζεται έλεγχος της σωστής ημέρας από τον διαχειριστή.'};
-  const candidates = [];
-  dates.forEach(function(date) {
-    try {
-      possibleInstants(date, time).forEach(function(instant) {
-        const at = Date.parse(instant);
-        if ((!Number.isFinite(after) || at >= after) && (!Number.isFinite(before) || at <= before)) candidates.push({date, instant});
-      });
-    } catch {}
-  });
-  const matchingDates = [...new Set(candidates.map(function(candidate) { return candidate.date; }))];
-  if (!matchingDates.length) return {error: correctionGapText(guidance)};
-  if (matchingDates.length !== 1) return {error: 'Αυτή η ώρα αντιστοιχεί σε περισσότερες ημέρες. Χρειάζεται επιβεβαίωση της σωστής ημέρας από τον διαχειριστή.'};
-  const date = matchingDates[0]; dateField.value = date;
+  dateField.value = date;
   const label = document.getElementById('correction-date-label'); if (label) label.textContent = shortCorrectionDate(date);
   const notice = document.getElementById('correction-date-notice'); if (notice) notice.textContent = date === guidance.date ? '' : 'Η ώρα αντιστοιχεί στις ' + shortCorrectionDate(date) + ' για αυτή τη νυχτερινή βάρδια.';
   updateDstChoices(form);
   return {date};
-}
-function validateCorrectionWindow(entries, guidance) {
-  if (!guidance) return;
-  const bounds = correctionBounds(guidance);
-  const after = correctionLowerBound(bounds.after);
-  const before = Date.parse(bounds.before);
-  if (!Number.isFinite(after) && !Number.isFinite(before)) return;
-  if (entries.some(function(entry) {
-    const at = Date.parse(entry.event_at);
-    return (Number.isFinite(after) && at < after) || (Number.isFinite(before) && at > before);
-  })) throw new Error(correctionGapText(guidance));
 }
 function cacheCorrectionState(id, current, events = [], data = null) {
   const previous = data || (String(state.employeeData?.employee?.id) === String(id) ? state.employeeData : null) || {employee: employee(id), events: []};
@@ -1219,8 +1153,7 @@ async function refreshDuplicateCorrection(id, guidance, token, session, code = '
   const next = correctionSuggestionForState(current, guidance?.requestedAction || null);
   if (next.issue && correctionIssueKey(next) === correctionIssueKey(guidance)) {
     state.correctionGuidance = {...next, guided: guidance?.guided === true};
-    const box = document.getElementById('correction-gap-info'); if (box) box.innerHTML = correctionContextHtml(next);
-    modalError(new Error((duplicate ? 'Αυτή η ώρα υπάρχει ήδη και υπολογίζεται στη ροή.' : 'Οι εκκρεμότητες ενημερώθηκαν.') + ' Η παρακάτω εκκρεμότητα παραμένει. ' + correctionGapText(next)));
+    modalError(new Error((duplicate ? 'Αυτή η ώρα υπάρχει ήδη και υπολογίζεται στη ροή.' : 'Οι εκκρεμότητες ενημερώθηκαν.') + ' Η παρακάτω εκκρεμότητα παραμένει. Συμπλήρωσε την πραγματική ώρα.'));
     return;
   }
   if (next.issue || next.actions.length) {
@@ -1537,7 +1470,6 @@ async function handleModalForm(form, decision) {
         if (!ACTIONS[type]) throw new Error('Επίλεξε την ενέργεια που θέλεις να διορθώσεις.');
         return { type, event_at: isoFromForm(form, prefix) };
       });
-      validateCorrectionWindow(entries, guidance);
       try {
         const payload = { employee_id: id, entries, reason: String(f.reason?.value || '').trim() };
         if (guidance?.issue?.event_id && guidance.guided) payload.guidance = {event_id: guidance.issue.event_id, state_before: guidance.issue.state_before, expected_actions: guidance.issue.expected_actions};
@@ -1553,7 +1485,7 @@ async function handleModalForm(form, decision) {
           cacheCorrectionState(id, current);
           const fresh = correctionSuggestionForState(current, guidance?.requestedAction || null);
           state.correctionGuidance = {...fresh, guided: guidance?.guided === true};
-          error.message = correctionGapText(fresh);
+          error.message = 'Η διόρθωση δεν αποθηκεύτηκε, γιατί η ώρα δεν ταιριάζει με τη σειρά των υπαρχουσών εγγραφών. Έλεγξε την ώρα ή ζήτησε έλεγχο του ιστορικού.';
         }
         throw error;
       }

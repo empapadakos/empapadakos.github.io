@@ -271,3 +271,31 @@ body.employee-kiosk {
   .employee-kiosk .kiosk-action { border:1px solid ButtonText; }
   .employee-kiosk :focus-visible { outline-color:Highlight; }
 }
+
+.employee-kiosk .kiosk-header { flex-wrap:wrap; gap:18px; }
+.employee-kiosk .kiosk-nav { display:flex; gap:10px; flex-wrap:wrap; }
+.employee-kiosk .kiosk-nav-button {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:43px;
+  padding:12px 18px;
+  border:0;
+  border-radius:8px;
+  background:#e2e8f0;
+  color:#1e293b;
+  font:700 14px/1.35 "Segoe UI",Tahoma,Geneva,Verdana,sans-serif;
+  text-decoration:none;
+  cursor:pointer;
+}
+.employee-kiosk .kiosk-nav-button.active { background:#2563eb; color:white; }
+.employee-kiosk .kiosk-admin-link { background:#475569; color:white; }
+.employee-kiosk .kiosk-nav-button:hover { filter:brightness(.94); }
+.employee-kiosk .kiosk-admin-link[aria-disabled="true"] { opacity:.6; cursor:wait; }
+.login-form .auth-tabs a.button { text-decoration:none; }
+.brand-text { min-width:0; font-size:17px; line-height:1.35; }
+@media (max-width:640px) {
+  .topbar:has(.return-shop-button) .live-clock { display:none; }
+  .topbar:has(.return-shop-button) .header-title-mobile { min-width:0; font-size:13px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .topbar .return-shop-button { flex-shrink:0; padding-inline:9px; font-size:12px; }
+}

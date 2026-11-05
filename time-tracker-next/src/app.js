@@ -1,6 +1,9 @@
 import { api } from './api.js';
+import { pageMode } from './page-mode.js';
 import { replay, effectiveEvents, planNext, monthlyStats, dateKey, formatTime, formatDate, formatMinutes, localToIso, possibleInstants } from './domain.js';
 
+const APP_NAME = 'Time Tracker v2';
+document.title = APP_NAME + (pageMode.admin ? ' · Διαχείριση' : '');
 const ACTIONS = { clock_in: 'Είσοδος', break_start: 'Έναρξη διαλείμματος', break_end: 'Επιστροφή', clock_out: 'Έξοδος' };
 const STATUS = { approved: 'Εγκεκριμένη', pending: 'Σε αναμονή', draft: 'Πρόχειρη', rejected: 'Απορρίφθηκε', void: 'Ακυρωμένη' };
 const ROLES = { admin: 'Πλήρης διαχείριση', reviewer: 'Προβολή αναφορών', operator: 'Τερματικό καταγραφής' };
@@ -25,7 +28,7 @@ const state = {
   adminData: null, audit: [], auditCursor: null, showArchived: false,
   search: '', department: '', busy: false, loadToken: 0, personToken: 0, connected: true,
   serverOffset: 0, lastActivity: Date.now(), pendingCommand: null, signup: false, authMessage: '', authError: false,
-  authMode: 'admin', authResend: false, authEmail: '', authUsername: '', authRetryRestore: false, authBusy: false,
+  authMode: pageMode.admin ? 'admin' : 'device', authResend: false, authEmail: '', authUsername: '', authRetryRestore: false, authBusy: false,
   modalMember: null, modalDevice: null, modalBrowser: null,
   browserGate: null, browserData: null, browserCheckBusy: false, browserCheckToken: 0, browserPollAt: 0, sessionLoadToken: 0,
   pendingBrowserRequest: '', openedBrowserRequest: '',
@@ -115,6 +118,7 @@ function setConnection(connected) {
 function setBusy(value) {
   state.busy = value;
   document.querySelectorAll('[data-mutate], [data-submit], .employee-card').forEach(function(el) { el.disabled = value; });
+  document.querySelectorAll('.kiosk-admin-link').forEach(function(el) { el.setAttribute('aria-disabled', String(value)); });
   document.body.classList.toggle('is-busy', value);
 }
 function pendingStorageKey() { return 'ttn-command:' + String(state.context?.email || '').toLowerCase(); }
@@ -220,6 +224,7 @@ function isoFromForm(form, prefix) {
   return localToIso(d, t, { disambiguation: choice });
 }
 function captureBrowserRequest() {
+  if (!pageMode.admin) return;
   const key = 'ttn-browser-review';
   try {
     const url = window.location?.href ? new URL(window.location.href) : null;
@@ -266,7 +271,7 @@ function renderBrowserGate() {
   const mail = notification === 'sent' ? 'Το αίτημα στάλθηκε με email στον ιδιοκτήτη. Η καταγραφή θα ανοίξει αφού εγκριθεί.' :
     (notification === 'not_configured' ? 'Η αποστολή email δεν έχει ρυθμιστεί. Ο διαχειριστής βλέπει το αίτημα στις Ρυθμίσεις.' :
     (notification === 'failed' ? 'Δεν επιβεβαιώθηκε η αποστολή email. Το αίτημα είναι διαθέσιμο στον ιδιοκτήτη στις Ρυθμίσεις.' : 'Ο ιδιοκτήτης μπορεί να ελέγξει το αίτημα από τις Ρυθμίσεις και να εγκρίνει αυτόν τον browser.'));
-  app.innerHTML = '<div class="browser-gate-page"><section class="card browser-gate-card"><div class="brand"><span class="brand-mark">Π</span><span>Παρουσίες<small>Time Tracker Next</small></span></div>' +
+  app.innerHTML = '<div class="browser-gate-page"><section class="card browser-gate-card"><div class="brand"><span class="brand-mark">⏱</span><span>' + esc(APP_NAME) + '</span></div>' +
     '<span class="badge ' + (revoked || unavailable ? 'red' : 'amber') + '">' + (revoked ? 'Ανακληθείσα πρόσβαση' : (unavailable ? 'Χρειάζεται έλεγχος browser' : 'Εκκρεμεί έγκριση')) + '</span><h1>' + title + '</h1>' +
     '<p>' + esc(unavailable ? (gate.message || 'Χρειάζεται browser που επιτρέπει ασφαλή τοπική αποθήκευση. Έλεγξε τις ρυθμίσεις του και δοκίμασε ξανά.') : (revoked ? 'Ο ιδιοκτήτης έχει αφαιρέσει την πρόσβαση αυτού του browser. Δεν επιτρέπονται καταγραφές από εδώ.' : mail)) + '</p>' +
     (gate.browser.display_name || gate.browser.username || gate.browser.label ? '<div class="browser-gate-identity"><strong>' + esc(gate.browser.display_name || gate.browser.username || 'Υπολογιστής καταγραφής') + '</strong><small>' + esc(gate.browser.label || gate.browser.username || '') + '</small></div>' : '') +
@@ -299,15 +304,15 @@ function renderLogin() {
   state.context = null;
   document.body.classList.remove('employee-kiosk');
   clearPasswords(app);
-  const device = state.authMode === 'device';
+  state.authMode = pageMode.admin ? 'admin' : 'device';
+  const device = !pageMode.admin;
   const resend = !device && state.authResend;
   const signup = !device && !resend && state.signup;
-  const title = resend ? 'Επιβεβαίωση email' : (signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση στην εφαρμογή');
-  app.innerHTML = '<div class="login-page"><section class="login-story"><div class="brand"><span class="brand-mark">Π</span><span>Παρουσίες<small>Time Tracker Next</small></span></div>' +
+  const title = resend ? 'Επιβεβαίωση email' : (signup ? 'Δημιουργία λογαριασμού' : (pageMode.admin ? 'Σύνδεση διαχείρισης' : 'Σύνδεση στην εφαρμογή'));
+  app.innerHTML = '<div class="login-page"><section class="login-story"><div class="brand"><span class="brand-mark">⏱</span><span>' + esc(APP_NAME) + '</span></div>' +
     '<h1>Η ομάδα σου.<br>Κάθε στιγμή,<br>σε σωστή σειρά.</h1><p>Καταγραφές παρουσίας, ξεκάθαρες διορθώσεις και μια κοινή εικόνα για την καθημερινή εργασία.</p><footer>Ώρα Ελλάδας · Οι αλλαγές επιβεβαιώνονται πριν εμφανιστούν ως αποθηκευμένες.</footer></section>' +
-    '<section class="login-form-wrap"><form id="auth-form" class="login-form"><div class="eyebrow">Καλώς ήρθες</div><div class="auth-tabs" role="group" aria-label="Τρόπος σύνδεσης">' +
-    button('Διαχείριση', 'auth-mode', 'data-mode="admin" aria-pressed="' + !device + '"', !device ? 'active' : '') +
-    button('Υπολογιστής καταγραφής', 'auth-mode', 'data-mode="device" aria-pressed="' + device + '"', device ? 'active' : '') + '</div><h2>' + title + '</h2><p>' +
+    '<section class="login-form-wrap"><form id="auth-form" class="login-form"><div class="eyebrow">Καλώς ήρθες</div>' + (device ? '<div class="auth-tabs" role="group" aria-label="Τρόπος σύνδεσης"><a class="button" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a>' +
+    button('Υπολογιστής καταγραφής', 'auth-mode', 'data-mode="device" aria-pressed="true"', 'active') + '</div>' : '') + '<h2>' + title + '</h2><p>' +
     (device ? 'Βάλε το όνομα χρήστη και τον κωδικό που όρισε ο διαχειριστής για αυτόν τον υπολογιστή.' : (resend ? 'Στείλε νέο σύνδεσμο επιβεβαίωσης στο email σου.' : (signup ? 'Χρησιμοποίησε το email για το οποίο έχεις πρόσβαση.' : 'Συνδέσου με το προσωπικό σου email διαχείρισης.'))) + '</p>' +
     browserLinkNotice() + (state.authMessage ? '<div class="form-message ' + (state.authError ? 'error' : '') + '" role="status">' + esc(state.authMessage) + '</div>' : '') +
     (state.authRetryRestore ? button('Επανάληψη σύνδεσης', 'retry-restore', '', 'block') : '') +
@@ -316,14 +321,19 @@ function renderLogin() {
     '<button class="button primary block" type="submit" data-submit>' + (resend ? 'Αποστολή νέου συνδέσμου' : (signup ? 'Δημιουργία λογαριασμού' : 'Σύνδεση')) + '</button><div id="auth-progress" class="login-progress" aria-live="polite"></div>' +
     (device ? '' : '<div class="login-switch">' + (signup || resend ? 'Έχεις ήδη λογαριασμό; ' : 'Πρώτη φορά εδώ; ') + '<button type="button" data-action="toggle-signup">' + (signup || resend ? 'Σύνδεση' : 'Δημιουργία λογαριασμού') + '</button>' +
     (resend ? '' : '<button type="button" data-action="resend-confirmation">Νέο email επιβεβαίωσης</button>') + '</div>') +
-    '<p class="login-help">' + (device ? 'Οι εργαζόμενοι επιλέγουν το όνομά τους και πατούν τις καταγραφές, χωρίς δικό τους email. Η σύνδεση διατηρείται σε αυτόν τον browser, χωρίς αποσύνδεση λόγω αδράνειας. Μπορεί να χρειαστεί νέα σύνδεση μετά από αποσύνδεση, αλλαγή πρόσβασης ή διαγραφή δεδομένων του browser.' : 'Η πρόσβαση δίνεται από τον διαχειριστή. Στο κοινό tablet χρησιμοποίησε λογαριασμό τερματικού, ώστε η διαχείριση να παραμένει προσωπική.') + '</p></form></section></div>';
+    '<p class="login-help">' + (device ? 'Οι εργαζόμενοι επιλέγουν το όνομά τους και πατούν τις καταγραφές, χωρίς δικό τους email. Η σύνδεση διατηρείται σε αυτόν τον browser, χωρίς αποσύνδεση λόγω αδράνειας. Μπορεί να χρειαστεί νέα σύνδεση μετά από αποσύνδεση, αλλαγή πρόσβασης ή διαγραφή δεδομένων του browser.' : 'Η πρόσβαση δίνεται από τον διαχειριστή. Στο κοινό tablet χρησιμοποίησε λογαριασμό τερματικού, ώστε η διαχείριση να παραμένει προσωπική.') + '</p>' +
+    (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'block') : '') + '</form></section></div>';
 }
 async function enterApp() {
   const token = ++state.sessionLoadToken;
   const context = await api.context(); if (token !== state.sessionLoadToken) return;
+  if (pageMode.admin && !['admin', 'reviewer'].includes(context.role)) {
+    await api.signOut();
+    throw new Error('Αυτός ο λογαριασμός δεν έχει πρόσβαση στη διαχείριση. Συνδέσου με το προσωπικό email διαχειριστή.');
+  }
   state.browserGate = null; state.browserPollAt = 0;
   state.context = context; setServerTime(context.server_now); state.lastActivity = Date.now();
-  restorePending(); state.view = VIEWS.find(function(v) { return v[3].includes(context.role); })?.[0] || 'overview';
+  restorePending(); state.view = pageMode.admin ? 'overview' : (VIEWS.find(function(v) { return v[3].includes(context.role); })?.[0] || 'overview');
   if (state.pendingBrowserRequest && isOwner()) state.view = 'settings';
   state.month ||= today().slice(0, 7); state.historyFrom ||= today().slice(0, 7) + '-01'; state.historyTo ||= today();
   reconcileSelections();
@@ -334,7 +344,8 @@ function renderShell() {
   const ctx = state.context;
   document.body.classList.toggle('employee-kiosk', isOperator());
   if (isOperator()) {
-    app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ Time Tracker Pro</h1></header>' +
+    app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ ' + esc(APP_NAME) + '</h1><nav class="kiosk-nav" aria-label="Κύρια πλοήγηση">' +
+      '<button class="kiosk-nav-button active" type="button" data-action="kiosk-home" aria-current="page">🏠 Κατάστημα</button><a class="kiosk-nav-button kiosk-admin-link" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a></nav></header>' +
       '<div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" class="kiosk-main" tabindex="-1"></main></div>';
     renderUncertain(); return;
   }
@@ -342,10 +353,10 @@ function renderShell() {
     return '<button type="button" class="nav-button ' + (v[0] === state.view ? 'active' : '') + '" data-action="navigate" data-view="' + v[0] + '" title="' + esc(v[1]) + '"><span class="nav-icon" aria-hidden="true">' + v[2] + '</span><span class="nav-label">' + v[1] + '</span>' +
       (v[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
   }).join('');
-  app.innerHTML = '<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">Π</span><span class="brand-text">Παρουσίες<small>Time Tracker Next</small></span></div><nav aria-label="Κύρια πλοήγηση">' + navigation + '</nav>' +
+  app.innerHTML = '<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">⏱</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + navigation + '</nav>' +
     '<div class="sidebar-footer"><div class="account-name">' + esc(ctx.display_name || ctx.username || ctx.email) + '</div><div class="account-role">' + esc(ROLES[ctx.role] || ctx.role) + (ctx.is_owner ? ' · Ιδιοκτήτης' : '') + '</div><button type="button" data-action="logout">Αποσύνδεση ↗</button></div></aside>' +
-    '<div class="main-wrap"><header class="topbar"><button class="icon-button mobile-menu-toggle" type="button" data-action="toggle-menu" aria-label="Μενού" aria-expanded="false">☰</button><span class="header-title-mobile">Παρουσίες</span><div class="breadcrumb">Χώρος εργασίας <span aria-hidden="true">/</span> <strong id="current-view-name">' + esc(VIEWS.find(function(v) { return v[0] === state.view; })?.[1] || '') + '</strong></div>' +
-    '<div class="header-actions"><span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
+    '<div class="main-wrap"><header class="topbar"><button class="icon-button mobile-menu-toggle" type="button" data-action="toggle-menu" aria-label="Μενού" aria-expanded="false">☰</button><span class="header-title-mobile">' + esc(APP_NAME) + '</span><div class="breadcrumb">Χώρος εργασίας <span aria-hidden="true">/</span> <strong id="current-view-name">' + esc(VIEWS.find(function(v) { return v[0] === state.view; })?.[1] || '') + '</strong></div>' +
+    '<div class="header-actions">' + (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'small return-shop-button') : '') + '<span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
   renderUncertain(); tick();
 }
 async function loadOverview() {
@@ -415,6 +426,10 @@ async function refreshApp() {
   try {
     const previousRole = state.context?.role;
     const context = await api.context(); if (token !== state.sessionLoadToken) return;
+    if (pageMode.admin && !['admin', 'reviewer'].includes(context.role)) {
+      await logout('Ο λογαριασμός δεν έχει πλέον πρόσβαση στη διαχείριση.');
+      return;
+    }
     state.context = context; setServerTime(context.server_now);
     reconcileSelections();
     if (!VIEWS.some(function(v) { return v[0] === state.view && v[3].includes(context.role); })) state.view = VIEWS.find(function(v) { return v[3].includes(context.role); })[0];
@@ -1089,16 +1104,28 @@ function exportStats() {
 }
 async function logout(message = '') {
   if (state.busy) return;
-  state.authMode = state.context?.login_kind === 'device' || state.browserGate ? 'device' : 'admin'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
+  state.authMode = pageMode.admin ? 'admin' : 'device'; state.signup = false; state.authResend = false; state.authRetryRestore = false;
   state.sessionLoadToken++; state.browserCheckToken++; state.browserCheckBusy = false; state.browserGate = null; state.browserData = null; state.browserPollAt = 0;
   closeModal(); state.loadToken++; state.context = null; state.employeeData = null; state.historyData = null; state.monthData = null;
   state.selectedId = ''; state.historyId = ''; state.statsId = ''; state.overview = null; state.requests = null; state.adminData = null; state.adminDay = null; state.adminDayLoadToken++; state.nextScheduledRefresh = 0;
   try { await api.signOut(); } catch {}
   state.authMessage = message; state.authError = false; renderLogin();
 }
+async function returnToShop() {
+  if (!pageMode.admin || state.busy || state.authBusy) return;
+  if (state.pendingCommand) { toast('Έλεγξε πρώτα την τελευταία αποθήκευση πριν επιστρέψεις στο κατάστημα.', 'error'); return; }
+  state.authBusy = true;
+  try {
+    await logout();
+    window.location.assign(pageMode.shopUrl);
+  } finally { state.authBusy = false; }
+}
 async function handleAction(action, node) {
   if (state.busy || state.authBusy) return;
+  if (action === 'return-shop') { await returnToShop(); return; }
   if (action === 'auth-mode' || action === 'toggle-signup' || action === 'resend-confirmation') {
+    if (!pageMode.admin && (action !== 'auth-mode' || node.dataset.mode === 'admin')) { window.location.assign(pageMode.adminUrl); return; }
+    if (pageMode.admin && action === 'auth-mode' && node.dataset.mode === 'device') { await returnToShop(); return; }
     rememberAuthIdentity(document.getElementById('auth-form'));
     if (action === 'auth-mode') { state.authMode = node.dataset.mode === 'device' ? 'device' : 'admin'; state.signup = false; state.authResend = false; }
     else if (action === 'resend-confirmation') { state.authMode = 'admin'; state.signup = false; state.authResend = true; }
@@ -1107,11 +1134,12 @@ async function handleAction(action, node) {
   }
   if (action === 'retry-restore') { state.authMessage = 'Επανασύνδεση…'; state.authError = false; renderLogin(); await initialize(); return; }
   if (action === 'browser-check') { await checkBrowserApproval(); return; }
-  if (action === 'browser-owner-login') { await logout(); state.authMode = 'admin'; renderLogin(); return; }
+  if (action === 'browser-owner-login') { if (!pageMode.admin) { window.location.assign(pageMode.adminUrl); return; } await logout(); state.authMode = 'admin'; renderLogin(); return; }
   if (action === 'logout') { await logout(); return; }
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'toggle-menu') { const side = document.getElementById('sidebar'); side?.classList.toggle('open'); node.setAttribute('aria-expanded', String(side?.classList.contains('open'))); return; }
   if (!state.context) return;
+  if (action === 'kiosk-home') { closeModal(); await refreshApp(); return; }
   if (action === 'browser-list-refresh') { await refreshBrowserList(); return; }
   if (action === 'browser-review-link') { await reviewBrowserLink(true); return; }
   if (action === 'browser-approve') { openBrowserDecision('approve', node.dataset.request); return; }
@@ -1197,7 +1225,7 @@ async function handleAuth(form) {
   if (state.authBusy) return;
   const submit = form.querySelector('[type=submit]'); const progress = document.getElementById('auth-progress');
   state.authBusy = true; submit.disabled = true;
-  const device = state.authMode === 'device'; const resend = !device && state.authResend;
+  const device = !pageMode.admin; const resend = !device && state.authResend;
   progress.textContent = resend ? 'Αποστολή email…' : (state.signup ? 'Δημιουργία λογαριασμού…' : 'Σύνδεση…');
   rememberAuthIdentity(form);
   try {
@@ -1374,6 +1402,7 @@ function tick() {
 }
 
 document.addEventListener('click', function(event) {
+  if (event.target.closest?.('a.kiosk-admin-link') && state.busy) { event.preventDefault(); return; }
   const node = event.target.closest?.('button[data-action]');
   if (!node || node.disabled) return;
   event.preventDefault();
@@ -1424,6 +1453,15 @@ if (typeof api.subscribe === 'function') api.subscribe(function(session) {
 });
 async function initialize() {
   if (state.authBusy) return;
+  if (pageMode.admin && window.location?.href) {
+    // Preserve callback credentials until the API verifies and removes them.
+    // The remaining panel parameter keeps reloads in the isolated admin scope.
+    const current = new URL(window.location.href);
+    if (current.searchParams.get('panel') !== 'admin') {
+      current.searchParams.set('panel', 'admin');
+      window.history?.replaceState?.(null, '', current.pathname + current.search + current.hash);
+    }
+  }
   captureBrowserRequest();
   state.authBusy = true;
   try {

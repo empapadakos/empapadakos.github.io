@@ -1,5 +1,8 @@
 import config from '../config.js';
 import {createBrowserIdentityStore} from './browser-identity.js';
+import {APP_REDIRECT_URL, pageMode} from './page-mode.js';
+
+export {APP_REDIRECT_URL} from './page-mode.js';
 
 export class TrackerError extends Error {
   constructor(message, {code = 'UNKNOWN', details = null, status = 0, uncertain = false, requestId = null} = {}) {
@@ -14,7 +17,6 @@ function decodeDetails(value) {
   try { return JSON.parse(value); } catch { return {description: value}; }
 }
 
-export const APP_REDIRECT_URL = 'https://empapadakos.github.io/time-tracker-next/';
 const DEVICE_DOMAIN = 'ttn-device.dwzbpfjvgphhtnweugfg.invalid';
 
 export async function deriveDevicePassword(password, cryptoImpl = globalThis.crypto) {
@@ -314,4 +316,24 @@ export function createTrackerApi({url, key, storageKey = 'time-tracker-next.auth
   };
 }
 
-export const api = createTrackerApi(config);
+function transientStorage() {
+  const values = new Map();
+  return {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); }
+  };
+}
+
+export function createPageTrackerApi(configuration, {mode = pageMode, adminStorage} = {}) {
+  const options = {...configuration, storageKey: mode.storageKey, redirectUrl: mode.redirectUrl};
+  if (mode.admin) {
+    // Keep the terminal's persistent localStorage session entirely separate.
+    // A blocked sessionStorage must never fall back to that terminal namespace.
+    if (adminStorage === undefined) { try { adminStorage = globalThis.sessionStorage; } catch {} }
+    options.storage = adminStorage || transientStorage();
+  }
+  return createTrackerApi(options);
+}
+
+export const api = createPageTrackerApi(config);

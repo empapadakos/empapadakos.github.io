@@ -36,6 +36,7 @@ function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, function(c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
 }
 function isAdmin() { return state.context?.role === 'admin'; }
+function isOperator() { return state.context?.role === 'operator'; }
 function isOwner() { return isAdmin() && state.context?.is_owner === true; }
 function canRecord() { return ['admin', 'operator'].includes(state.context?.role); }
 function now() { return new Date(Date.now() + state.serverOffset); }
@@ -80,6 +81,9 @@ function colorAvatars() {
       el.style.backgroundColor = el.dataset.color + '22';
       el.style.color = el.dataset.color;
     }
+  });
+  document.querySelectorAll('.kiosk-employee[data-color]').forEach(function(el) {
+    el.style.backgroundColor = /^#[0-9a-f]{6}$/i.test(el.dataset.color || '') ? el.dataset.color : '#ffffff';
   });
 }
 function option(value, label, selected) { return '<option value="' + esc(value) + '"' + (String(value) === String(selected) ? ' selected' : '') + '>' + esc(label) + '</option>'; }
@@ -167,13 +171,23 @@ function modalError(error) {
   }
 }
 function clearPasswords(root) { root?.querySelectorAll('input[type="password"]').forEach(function(input) { input.value = ''; }); }
-function closeModal() { if (!state.busy) { clearPasswords(modal); modal.close(); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null; } }
+function clearKioskSelection() {
+  if (!isOperator()) return;
+  state.personToken++; state.selectedId = ''; state.employeeData = null;
+}
+function closeModal() {
+  if (state.busy) return;
+  clearPasswords(modal); modal.close(); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null;
+  clearKioskSelection();
+}
 function openModal(title, subtitle, body, footer, kind = '') {
   if (modal.open) { clearPasswords(modal); modal.close(); }
+  modal.classList.toggle('kiosk-dialog', isOperator());
+  modal.classList.toggle('kiosk-actions-dialog', isOperator() && kind === 'kiosk-actions');
   modal.innerHTML = '<form id="modal-form" data-kind="' + esc(kind) + '"><header class="modal-header"><div><h2 id="modal-title">' + esc(title) + '</h2>' +
-    (subtitle ? '<p>' + esc(subtitle) + '</p>' : '') + '</div><button type="button" class="icon-button" data-action="close-modal" aria-label="Κλείσιμο">×</button></header>' +
+    (subtitle ? '<p>' + esc(subtitle) + '</p>' : '') + '</div>' + (isOperator() ? '' : '<button type="button" class="icon-button" data-action="close-modal" aria-label="Κλείσιμο">×</button>') + '</header>' +
     '<div class="modal-body"><div id="modal-error" class="modal-error" role="alert"></div>' + body + '</div>' +
-    '<footer class="modal-footer">' + button('Άκυρο', 'close-modal') + footer + '</footer></form>';
+    '<footer class="modal-footer">' + button(isOperator() ? 'Ακύρωση' : 'Άκυρο', 'close-modal') + footer + '</footer></form>';
   modal.showModal(); updateDstChoices(modal); colorAvatars();
   setTimeout(function() { modal.querySelector('input:not([type=hidden]),select,textarea,button')?.focus(); }, 30);
 }
@@ -244,6 +258,7 @@ function handleBrowserGate(error) {
 }
 function renderBrowserGate() {
   const gate = state.browserGate; if (!gate) return;
+  document.body.classList.remove('employee-kiosk');
   clearPasswords(app);
   const revoked = gate.status === 'revoked'; const unavailable = gate.status === 'unavailable';
   const notification = gate.notification?.status;
@@ -282,6 +297,7 @@ async function checkBrowserApproval() {
 }
 function renderLogin() {
   state.context = null;
+  document.body.classList.remove('employee-kiosk');
   clearPasswords(app);
   const device = state.authMode === 'device';
   const resend = !device && state.authResend;
@@ -316,6 +332,12 @@ async function enterApp() {
 }
 function renderShell() {
   const ctx = state.context;
+  document.body.classList.toggle('employee-kiosk', isOperator());
+  if (isOperator()) {
+    app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ Time Tracker Pro</h1></header>' +
+      '<div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" class="kiosk-main" tabindex="-1"></main></div>';
+    renderUncertain(); return;
+  }
   const navigation = VIEWS.filter(function(v) { return v[3].includes(ctx.role); }).map(function(v) {
     return '<button type="button" class="nav-button ' + (v[0] === state.view ? 'active' : '') + '" data-action="navigate" data-view="' + v[0] + '" title="' + esc(v[1]) + '"><span class="nav-icon" aria-hidden="true">' + v[2] + '</span><span class="nav-label">' + v[1] + '</span>' +
       (v[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
@@ -411,6 +433,7 @@ function employeeGrid() {
 }
 function renderRecord() {
   const employees = activeEmployees();
+  if (isOperator()) return renderKioskNames(employees);
   if (!employees.length) return heading('Καταγραφή παρουσίας', 'Είσοδος, διάλειμμα και έξοδος σε σωστή σειρά.') + '<div class="card">' + empty('Η ομάδα σου ξεκινά εδώ', isAdmin() ? 'Πρόσθεσε το προσωπικό για να αρχίσουν οι καταγραφές.' : 'Ο διαχειριστής δεν έχει προσθέσει ακόμη ενεργούς εργαζομένους.', isAdmin() ? button('Προσθήκη προσωπικού', 'navigate', 'data-view="employees"', 'primary') : '') + '</div>';
   const departments = [...new Set(employees.map(function(e) { return e.department; }).filter(Boolean))].sort();
   return heading('Καταγραφή παρουσίας', 'Επίλεξε το όνομά σου και την ενέργεια που θέλεις να καταγράψεις.') +
@@ -418,6 +441,29 @@ function renderRecord() {
     '<div class="field"><label for="employee-search" class="sr-only">Αναζήτηση εργαζομένου</label><input id="employee-search" name="employee_search" type="search" placeholder="Αναζήτηση ονόματος…" value="' + esc(state.search) + '" autocomplete="off"></div>' +
     '<div class="field"><label for="employee-department" class="sr-only">Τμήμα</label><select id="employee-department" name="employee_department">' + option('', 'Όλα τα τμήματα', state.department) + departments.map(function(d) { return option(d, d, state.department); }).join('') + '</select></div></div><div id="employee-grid" class="employee-grid">' + employeeGrid() + '</div></section>' +
     '<aside class="employee-panel card" id="employee-panel">' + renderSelectedPerson() + '</aside></div>';
+}
+function renderKioskNames(employees) {
+  if (!employees.length) return '<p class="kiosk-empty" role="status">Δεν υπάρχουν ενεργοί εργαζόμενοι.</p>';
+  let html = ''; let department = null;
+  employees.forEach(function(e) {
+    const nextDepartment = e.department || '';
+    if (department !== nextDepartment) {
+      if (department !== null) html += '</div></section>';
+      html += '<section class="kiosk-section">' + (nextDepartment ? '<h2 class="kiosk-section-title">' + esc(nextDepartment) + '</h2>' : '') + '<div class="kiosk-grid">';
+      department = nextDepartment;
+    }
+    html += '<button class="employee-card kiosk-employee" type="button" data-action="select-employee" data-id="' + esc(e.id) + '" data-color="' + esc(/^#[0-9a-f]{6}$/i.test(e.color || '') ? e.color : '#ffffff') + '">' + esc(e.name) + '</button>';
+  });
+  return html + '</div></section>';
+}
+function kioskActions(id) {
+  const actions = [
+    ['clock_in', '🚪 Είσοδος'], ['clock_out', '🚶 Έξοδος'],
+    ['break_start', '☕ Διάλειμμα Έναρξη'], ['break_end', '🔙 Διάλειμμα Επιστροφή']
+  ];
+  return '<div class="kiosk-action-grid">' + actions.map(function(action) {
+    return '<button type="button" class="kiosk-action" data-action="record-action" data-type="' + action[0] + '" data-mutate>' + action[1] + '</button>';
+  }).join('') + '<button type="button" class="kiosk-action kiosk-correction" data-action="open-correction" data-id="' + esc(id) + '" data-mutate>⚠ Αίτημα Διόρθωσης</button></div>';
 }
 function renderSelectedPerson() {
   const e = employee(state.selectedId);
@@ -845,6 +891,26 @@ function renderAudit() {
     (state.auditCursor ? '<div class="table-footer">' + button('Παλαιότερες αλλαγές', 'more-audit') + '</div>' : '') + '</section>';
 }
 async function selectEmployee(id, navigateFirst = false) {
+  if (isOperator()) {
+    const e = employee(id);
+    if (!e || e.archived || state.busy) return;
+    if (state.pendingCommand) { toast('Έλεγξε πρώτα την τελευταία αποθήκευση από το μήνυμα στην κορυφή.', 'error'); return; }
+    const token = ++state.personToken; const session = state.sessionLoadToken;
+    state.selectedId = id; state.employeeData = null;
+    openModal(e.name, '', loading(), '', 'kiosk-actions');
+    try {
+      const data = await api.read('employee', { employee_id: id });
+      if (token !== state.personToken || session !== state.sessionLoadToken || state.selectedId !== id || !isOperator() || !modal.open) return;
+      if (String(data.employee?.id) !== String(id)) throw new Error('Δεν φορτώθηκε ο εργαζόμενος. Δοκίμασε ξανά.');
+      state.employeeData = data; setServerTime(data.server_now);
+      openModal(e.name, '', kioskActions(id), '', 'kiosk-actions');
+    } catch (error) {
+      if (token !== state.personToken || session !== state.sessionLoadToken || state.selectedId !== id || !isOperator()) return;
+      if (handleBrowserGate(error)) return;
+      openModal(e.name, '', banner(esc(error.message || 'Δεν ήταν δυνατή η φόρτωση.'), 'error'), button('Δοκιμή ξανά', 'select-employee', 'data-id="' + esc(id) + '"'), 'kiosk-actions');
+    }
+    return;
+  }
   const token = ++state.personToken;
   state.selectedId = id; state.employeeData = null;
   if (navigateFirst) await navigate('record'); else {
@@ -875,19 +941,20 @@ async function recordAction(type) {
   try {
     const response = await command('record', { employee_id: id, type });
     const result = response?.result || response || {};
+    if (isOperator()) closeModal();
     if (result.already_recorded) toast(result.message || (ACTIONS[type] + ' έχει ήδη οριστεί' + (result.event?.event_at ? ' στις ' + displayTime(result.event.event_at) : '') + '.'), 'success');
     else toast(result.message || (ACTIONS[type] + ' καταγράφηκε.'), 'success');
     await loadView('record', true);
   } catch (error) {
     if (state.browserGate || handleBrowserGate(error)) return;
-    if (error.uncertain) { toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
+    if (error.uncertain) { if (isOperator()) closeModal(); toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
     const suggestion = suggestionFrom(error, stateOf(state.employeeData), type);
     const detail = '<p>' + esc(error.message || 'Η ενέργεια χρειάζεται προηγούμενες κινήσεις.') + '</p>' +
       (suggestion.actions.length ? '<p class="muted">Χρειάζονται με τη σειρά:</p><ol class="issue-list">' + suggestion.actions.map(function(a) { return '<li>' + esc(ACTIONS[a]) + '</li>'; }).join('') + '</ol>' : '') +
       (error.details?.issues?.length ? '<ul class="issue-list">' + error.details.issues.slice(0, 5).map(function(i) { return '<li>' + esc(i.message) + '</li>'; }).join('') + '</ul>' : '');
     state.correctionSuggestion = { employeeId: id, ...suggestion };
     const repairable = suggestion.actions.length || error.details?.issues?.length;
-    openModal('Έλεγχος ακολουθίας', personName(id), detail, repairable ? button('Υποβολή διορθώσεων', 'correction-from-warning', '', 'primary') : '');
+    openModal(isOperator() ? '⚠ Προσοχή' : 'Έλεγχος ακολουθίας', personName(id), detail, repairable ? button('Υποβολή διορθώσεων', 'correction-from-warning', '', 'primary') : '');
   }
 }
 function correctionEntryHtml(index, action = 'clock_in', iso = now()) {
@@ -905,11 +972,11 @@ function openCorrection(id, suggestion = null) {
     base = localToIso(defaultDate, hour, { disambiguation: 'earlier' });
   } catch {}
   state.modalEmployeeId = id; state.correctionEntryCount = actions.length;
-  const body = banner('Καταχώρησε την πραγματική ώρα κάθε ελλείπουσας κίνησης. Η συνέχεια επιτρέπεται μόλις καλυφθούν όλες οι ελλείψεις.', '') +
+  const body = (isOperator() ? '' : banner('Καταχώρησε την πραγματική ώρα κάθε ελλείπουσας κίνησης. Η συνέχεια επιτρέπεται μόλις καλυφθούν όλες οι ελλείψεις.', '')) +
     '<div id="correction-entries">' + actions.map(function(action, index) { return correctionEntryHtml(index, action, base); }).join('') + '</div>' +
     button('+ Προσθήκη κίνησης', 'add-correction-entry', '', 'text') +
     '<div class="field"><label for="f-reason">Σύντομη αιτιολογία</label><textarea id="f-reason" name="reason" maxlength="1000" required placeholder="Π.χ. ξέχασα να καταγράψω την επιστροφή και την έξοδο."></textarea></div>';
-  openModal('Αίτημα διόρθωσης', personName(id), body, submitButton('Υποβολή διορθώσεων'), 'correction');
+  openModal(isOperator() ? '📝 Νέο Αίτημα Διόρθωσης' : 'Αίτημα διόρθωσης', personName(id), body, submitButton(isOperator() ? 'ΑΠΟΣΤΟΛΗ ΠΡΟΣ ADMIN' : 'Υποβολή διορθώσεων'), 'correction');
 }
 function allKnownEvents() {
   return [state.historyData?.events, state.employeeData?.events, state.monthData?.events, state.requests?.events].flatMap(function(v) { return v || []; });
@@ -1335,7 +1402,7 @@ document.addEventListener('input', function(event) {
 });
 modal.addEventListener('cancel', function(event) {
   if (state.busy) event.preventDefault();
-  else { clearPasswords(modal); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null; }
+  else { clearPasswords(modal); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null; clearKioskSelection(); }
 });
 window.addEventListener('offline', function() { setConnection(false); });
 window.addEventListener('online', function() { if (state.browserGate) checkBrowserApproval(); else if (state.context && !state.busy) refreshApp(); });

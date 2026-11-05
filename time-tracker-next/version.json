@@ -1,6 +1,6 @@
 {
-  "version": "1.3.0",
-  "sourceCommit": "94aca828e67d0f20a8b222d34e46b0756439d42f",
+  "version": "1.4.0",
+  "sourceCommit": "a612ab0e32da468dde74c813b5ccc8f857a4268d",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",

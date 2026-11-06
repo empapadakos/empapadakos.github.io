@@ -1336,8 +1336,9 @@ function shortCorrectionDate(day) {
   return parts.length === 3 ? Number(parts[2]) + '/' + Number(parts[1]) + '/' + parts[0].slice(-2) : dateDisplay(day);
 }
 function guidedCorrectionEntryHtml(action, date) {
+  const timeLabels = {clock_in: 'εισόδου', clock_out: 'εξόδου', break_start: 'έναρξης διαλείμματος', break_end: 'επιστροφής από το διάλειμμα'};
   const labels = {clock_in: 'η Είσοδος', clock_out: 'η Έξοδος', break_start: 'η Έναρξη διαλείμματος', break_end: 'η Επιστροφή από το διάλειμμα'};
-  return '<section class="correction-entry" data-entry="0"><p class="strong">' + esc(personName(state.modalEmployeeId)) + ', στις <span id="correction-date-label">' + esc(shortCorrectionDate(date)) + '</span> λείπει ' + esc(labels[action] || ACTIONS[action]) + '. Βάλε τη σωστή ώρα και πάτα «Αποστολή στον admin».</p>' +
+  return '<section class="correction-entry" data-entry="0"><p class="strong">' + esc(personName(state.modalEmployeeId)) + ', στις <span id="correction-date-label">' + esc(shortCorrectionDate(date)) + '</span> λείπει ' + esc(labels[action] || ACTIONS[action]) + '. Βάλε τη σωστή ώρα <strong class="attendance-negative">' + esc(timeLabels[action] || ACTIONS[action]) + '</strong> και πάτα «Αποστολή στον admin».</p>' +
     '<input type="hidden" name="entry_0_type" value="' + esc(action) + '">' + fixedDateTimeFields(date, 'entry_0') + '<p id="correction-date-notice" class="field-help" role="status"></p></section>';
 }
 function manualOperatorCorrectionHtml(date) {

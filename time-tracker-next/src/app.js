@@ -337,17 +337,18 @@ function attendancePayload(action, payload) {
   return ATTENDANCE_ACTIONS.has(action) && epoch !== undefined && epoch !== null
     ? { ...payload, attendance_epoch: epoch } : payload;
 }
-async function command(action, payload, retry = false, completionMessage = null) {
+async function command(action, payload, retry = false, completionMessage = null, deletionPassword = null) {
   if (state.busy) throw new Error('Περίμενε να ολοκληρωθεί η προηγούμενη ενέργεια.');
   if (state.pendingCommand && !retry) throw new Error('Έλεγξε πρώτα την τελευταία αποθήκευση από το μήνυμα στην κορυφή.');
   const pending = retry ? state.pendingCommand : { action, payload: attendancePayload(action, payload), id: crypto.randomUUID(), email: state.context?.email, ...(completionMessage ? {completionMessage} : {}) };
   if (!pending) return null;
   savePending(pending); setBusy(true);
   try {
+    if (deletionPassword !== null) await api.authorizeDeletion({action:pending.action,payload:pending.payload,request_id:pending.id,password:deletionPassword});
     const result = await api.command(pending.action, pending.payload, pending.id);
     savePending(null); setConnection(true); setServerTime(result?.server_now); return result;
   } catch (error) {
-    if (!error.uncertain && ((error.status && error.status < 500) || error.details || error.code === 'P0001')) savePending(null);
+    if (!error.uncertain && ((error.status && error.status < 500) || error.details || error.code === 'P0001' || error.deletionAuthorization)) savePending(null);
     if (error.uncertain) setConnection(false);
     handleBrowserGate(error);
     throw error;
@@ -402,7 +403,7 @@ function closeModal() {
   clearPasswords(modal); modal.close(); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null;
   clearKioskSelection();
 }
-function openModal(title, subtitle, body, footer, kind = '') {
+function openModal(title, subtitle, body, footer, kind = '', initialFocus = '') {
   state.correctionToken++;
   if (kind !== 'correction') state.correctionGuidance = null;
   if (modal.open) { clearPasswords(modal); modal.close(); }
@@ -411,9 +412,9 @@ function openModal(title, subtitle, body, footer, kind = '') {
   modal.innerHTML = '<form id="modal-form" data-kind="' + esc(kind) + '"><header class="modal-header"><div><h2 id="modal-title">' + esc(title) + '</h2>' +
     (subtitle ? '<p>' + esc(subtitle) + '</p>' : '') + '</div>' + (isOperator() ? '' : '<button type="button" class="icon-button" data-action="close-modal" aria-label="Κλείσιμο">×</button>') + '</header>' +
     '<div class="modal-body"><div id="modal-error" class="modal-error" role="alert"></div>' + body + '</div>' +
-    '<footer class="modal-footer">' + button(isOperator() ? 'Ακύρωση' : 'Άκυρο', 'close-modal') + footer + '</footer></form>';
+    '<footer class="modal-footer">' + button(isOperator() ? 'Ακύρωση' : 'Άκυρο', 'close-modal', initialFocus === 'cancel' ? 'autofocus' : '') + footer + '</footer></form>';
   modal.showModal(); updateDstChoices(modal); colorAvatars();
-  setTimeout(function() { modal.querySelector('input:not([type=hidden]),select,textarea,button')?.focus(); }, 30);
+  setTimeout(function() { modal.querySelector(initialFocus === 'cancel' ? 'button[data-action="close-modal"]' : 'input:not([type=hidden]),select,textarea,button')?.focus(); }, 30);
 }
 function submitButton(label, value = '') { return '<button class="button primary" type="submit" data-submit value="' + esc(value) + '">' + esc(label) + '</button>'; }
 function dateTimeValues(iso = now()) {
@@ -829,21 +830,21 @@ function filteredHistory() {
 function renderHistory() {
   if (!state.historyId) return heading('Καταγραφές', 'Το ιστορικό κινήσεων κάθε εργαζομένου.') + '<div class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</div>';
   const readOnly = isArchiveView('history');
-  const canEdit = isAdmin() && !readOnly;
+  const canEdit = isAdmin() && !readOnly, canDelete = isOwner() && !readOnly;
   const rows = filteredHistory();
   const filters = '<div class="filter-row">' + datasetField('history') + selectField('Εργαζόμενος', 'history_employee', employeeOptions(state.historyId,false,state.showArchived)) +
     field('Από', 'history_from', state.historyFrom, 'date') + field('Έως', 'history_to', state.historyTo, 'date') +
     selectField('Κατάσταση', 'history_status', option('', 'Όλες', state.historyStatus) + Object.entries(STATUS).map(function(p) { return option(p[0], p[1], state.historyStatus); }).join('')) +
     selectField('Ενέργεια', 'history_type', option('', 'Όλες', state.historyType) + Object.entries(ACTIONS).map(function(p) { return option(p[0], p[1], state.historyType); }).join('')) + '</div>';
   return heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() && !readOnly ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
-    '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canEdit ? '<div id="bulk-bar" class="bulk-bar history-delete-bar"><span id="bulk-label">0 επιλεγμένες κινήσεις</span>' + button('Διαγραφή επιλεγμένων', 'void-selected', 'id="delete-selected-events" disabled', 'danger small') + '</div>' : '') +
+    '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canDelete ? '<div id="bulk-bar" class="bulk-bar history-delete-bar"><span id="bulk-label">0 επιλεγμένες κινήσεις</span>' + button('Διαγραφή επιλεγμένων', 'void-selected', 'id="delete-selected-events" disabled', 'danger small') + '</div>' : '') +
     (state.historyData?.history_limited ? '<p class="field-help">Στο τερματικό εμφανίζονται έως 200 πρόσφατες κινήσεις. Το πλήρες ιστορικό είναι διαθέσιμο στη διαχείριση.</p>' : '') +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th>Ενέργειες</th><th class="history-selection-col"><label class="check-label"><input type="checkbox" id="select-all-events" data-mutate aria-label="Επιλογή όλων των εμφανιζόμενων κινήσεων που μπορούν να διαγραφούν">Επιλογή όλων</label></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th>Ενέργειες</th>' : '') + (canDelete ? '<th class="history-selection-col"><label class="check-label"><input type="checkbox" id="select-all-events" data-mutate aria-label="Επιλογή όλων των εμφανιζόμενων κινήσεων που μπορούν να διαγραφούν">Επιλογή όλων</label></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
       const editable = ['approved', 'pending'].includes(ev.status);
-      const deletable = ['approved', 'pending', 'draft'].includes(ev.status);
+      const deletable = canDelete && ['approved', 'pending', 'draft'].includes(ev.status);
       return '<tr><td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'history_cleanup' ? '<small class="shift-line">Εκτιμώμενη παλιά ώρα</small>' : (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '')) + '</td>' +
-        (canEdit ? '<td><div class="actions">' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + (deletable ? button('Διαγραφή', 'delete-history-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'danger small') : '') + '</div></td><td class="history-selection-col">' + (deletable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" data-mutate aria-label="' + esc('Επιλογή κίνησης: ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '">' : '') + '</td>' : '') + '</tr>';
-    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι διαγραμμένες κινήσεις διατηρούνται ως ακυρωμένες για έλεγχο.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
+        (canEdit ? '<td><div class="actions">' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + (deletable ? button('Διαγραφή', 'delete-history-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'danger small') : '') + '</div></td>' : '') + (canDelete ? '<td class="history-selection-col">' + (deletable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" data-mutate aria-label="' + esc('Επιλογή κίνησης: ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '">' : '') + '</td>' : '') + '</tr>';
+    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρωμένες κινήσεις εμφανίζονται με κατάσταση «Ακυρωμένη» και δεν υπολογίζονται στις ώρες.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
 }
 function visibleRequestRows() { return (state.requests?.events || []).filter(function(ev) { return !(state.context?.employees || []).some(function(e) { return String(e.id) === String(ev.employee_id) && (e.archived || e.deleted_at); }); }); }
 function pendingRequestRows() {
@@ -1014,7 +1015,7 @@ function adminSlotHtml(slot, group, br = null) {
   const marker = saved?.source === 'history_cleanup' ? '<span class="badge amber">Εκτιμώμενη παλιά ώρα</span>' : (saved?.status === 'draft' ? '<span class="badge">Πρόχειρη · αναμονή προϋποθέσεων</span>' : (saved && isScheduledEvent(saved) ? '<span class="badge planned">Ορισμένη ώρα</span>' : (saved?.source === 'admin' ? '<span class="badge">Από διαχειριστή</span>' : '')));
   if (slot.readonly) return '<section class="admin-slot anchor"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker + '<span class="badge">Άλλη ημέρα</span></div><p class="mono">' + esc(displayDate(saved.event_at)) + ' · ' + esc(displayTime(saved.event_at, true)) + '</p><small>Η αρχική κίνηση διατηρείται. Άλλαξέ την από την αντίστοιχη ημέρα.</small></section>';
   return '<section class="admin-slot' + (slot.remove ? ' removed' : '') + '" data-admin-slot="' + esc(slot.key) + '"><div class="admin-slot-title"><strong>' + esc(label) + '</strong>' + marker +
-    (saved ? button(slot.remove ? 'Αναίρεση διαγραφής' : 'Διαγραφή ώρας', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', slot.remove ? 'text small' : 'text small danger') : '') + '</div>' +
+    (saved && isOwner() ? button(slot.remove ? 'Αναίρεση διαγραφής' : 'Διαγραφή ώρας', 'admin-remove-slot', 'data-key="' + esc(slot.key) + '"', slot.remove ? 'text small' : 'text small danger') : '') + '</div>' +
     (slot.remove ? '<p class="muted">Η ώρα ' + esc(displayDate(saved.event_at)) + ' στις <strong class="mono">' + esc(displayTime(saved.event_at)) + '</strong> θα αφαιρεθεί από το παρουσιολόγιο όταν πατήσεις «Αποθήκευση ωρών». Το ίχνος της αλλαγής διατηρείται στο ιστορικό.</p>' : '<div class="admin-time-fields">' +
       field('Ημερομηνία', prefix + '_date', slot.date, 'date', 'data-dst="' + esc(prefix) + '"') +
       field('Ώρα', prefix + '_time', slot.time, 'time', 'data-dst="' + esc(prefix) + '"') +
@@ -1035,16 +1036,18 @@ function captureAdminDayFields(form = document.getElementById('modal-form')) {
 }
 function renderAdminDayEditor() {
   const model = state.adminDay; if (!model || !isAdmin()) return;
+  const removals = adminSlots(model).filter(function(slot) { return slot.original && slot.remove && !slot.readonly; }).length;
   const body = banner('Μπορείς να ορίσεις ώρες χωρίς προηγούμενα χτυπήματα. Οι μελλοντικές ώρες ισχύουν όταν φτάσει η ώρα τους. Ελλιπείς νέες κινήσεις μένουν πρόχειρες μέχρι να συμπληρωθούν οι προϋποθέσεις.', '') +
     '<div class="admin-day-groups">' + model.groups.map(function(group, index) {
       return '<section class="admin-shift"><div class="admin-shift-title"><h3>' + (index + 1) + 'η βάρδια</h3></div><div class="admin-shift-ends">' + adminSlotHtml(group.entry, group) + adminSlotHtml(group.exit, group) + '</div>' +
         '<div class="admin-breaks">' + group.breaks.map(function(br, i) { return '<div class="admin-break"><h4>' + (i + 1) + 'ο διάλειμμα</h4><div class="admin-shift-ends">' + adminSlotHtml(br.start, group, br) + adminSlotHtml(br.end, group, br) + '</div></div>'; }).join('') + '</div>' +
         button('+ Νέο διάλειμμα', 'admin-add-break', 'data-group="' + esc(group.id) + '"', 'text small') + '</section>';
     }).join('') + '</div>' + button('+ Νέα βάρδια', 'admin-add-shift', '', 'text') +
+    deletionPasswordField(removals) +
     '<div class="field"><label for="f-admin_reason">Αιτιολογία καταχώρησης · προαιρετική</label><textarea name="admin_reason" id="f-admin_reason" maxlength="1000" placeholder="Π.χ. ορισμός ωρών από τον διαχειριστή">' + esc(model.reason || '') + '</textarea></div>' +
     '<p class="field-help">Συμπλήρωσε μόνο όσα θέλεις να ορίσεις. Τα κενά πεδία παραμένουν διαθέσιμα και δεν δημιουργούν χτυπήματα. Οι αλλαγές αποθηκεύονται όλες μαζί.</p>' +
     '<p class="field-help">Για λανθασμένη υπάρχουσα καταγραφή, επίλεξε «Διαγραφή ώρας» και αποθήκευσε. Δεν αφαιρούνται αυτόματα άλλες κινήσεις: αν εξαρτώνται από αυτήν, επίλεξέ τες επίσης για διαγραφή, ώστε η ακολουθία να παραμένει σωστή.</p>';
-  openModal('Ώρες ημέρας', personName(model.employeeId) + ' · ' + dateDisplay(model.date), body, submitButton('Αποθήκευση ωρών'), 'admin-day');
+  openModal('Ώρες ημέρας', personName(model.employeeId) + ' · ' + dateDisplay(model.date), body, submitButton('Αποθήκευση ωρών'), 'admin-day', removals ? 'cancel' : '');
 }
 async function openAdminDay(employeeId, date, preferred = {}) {
   if (!isAdmin() || isArchiveView() || !employeeId || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return;
@@ -1694,15 +1697,26 @@ function openEmployee(id) {
     field('Ανοχή καθυστέρησης · λεπτά', 'lateness_tolerance_minutes', e.lateness_tolerance_minutes || 0, 'number', 'min="0" max="240" required') + '</div>';
   openModal(e.id ? 'Επεξεργασία εργαζομένου' : 'Νέος εργαζόμενος', 'Οι ώρες χρησιμοποιούνται για τις ενδείξεις αργοπορίας και πρόωρης αποχώρησης.', body, submitButton('Αποθήκευση'), 'employee');
 }
+function deletionPasswordField(count) {
+  return count > 1 ? '<div class="field"><label for="f-deletion_password">Κωδικός κύριου διαχειριστή</label><input id="f-deletion_password" name="deletion_password" type="password" autocomplete="current-password" maxlength="1024" required><p class="field-help">Για διαγραφή πολλών καταγραφών, επιβεβαίωσε τον κωδικό σύνδεσής σου στο Time Tracker.</p></div>' : '';
+}
 function openVoid(ids) {
-  if (!isAdmin() || isArchiveView() || !ids.length) return;
+  if (!isOwner() || isArchiveView() || !ids.length) return;
   ids = [...new Set(ids.map(String))];
   if (ids.length > 100) { toast('Μπορείς να διαγράψεις έως 100 κινήσεις μαζί. Μείωσε τις επιλεγμένες κινήσεις και δοκίμασε ξανά.', 'error'); return; }
   state.modalVoidIds = ids;
-  openModal(ids.length === 1 ? 'Διαγραφή καταγραφής' : 'Διαγραφή καταγραφών', ids.length + (ids.length === 1 ? ' επιλεγμένη κίνηση' : ' επιλεγμένες κινήσεις'),
-    banner('Η διαγραφή αφαιρεί τις κινήσεις από τους υπολογισμούς. Οι εγγραφές διατηρούνται ως ακυρωμένες στο ιστορικό για έλεγχο. Δεν επιτρέπεται να μείνουν άλλες κινήσεις χωρίς τις προϋποθέσεις τους.', 'warning') +
-    '<div class="field"><label for="f-reason">Αιτιολογία διαγραφής</label><textarea id="f-reason" name="reason" minlength="3" maxlength="1000" required></textarea></div>', '<button class="button danger" type="submit" data-submit>Διαγραφή κινήσεων</button>', 'void');
+  openModal(ids.length === 1 ? 'Επιβεβαίωση διαγραφής καταγραφής' : 'Επιβεβαίωση διαγραφής καταγραφών', ids.length + (ids.length === 1 ? ' επιλεγμένη κίνηση' : ' επιλεγμένες κινήσεις'),
+    banner('Προσοχή: οι επιλεγμένες κινήσεις θα αφαιρεθούν από τους υπολογισμούς. Θα παραμείνουν στις «Καταγραφές» με κατάσταση «Ακυρωμένη», για έλεγχο. Η διαγραφή επιτρέπεται μόνο όταν διατηρείται σωστή η ακολουθία των υπόλοιπων κινήσεων.', 'warning') +
+    '<div class="field"><label for="f-reason">Αιτιολογία διαγραφής</label><textarea id="f-reason" name="reason" minlength="3" maxlength="1000" required></textarea></div>' + deletionPasswordField(ids.length),
+    '<button class="button danger" type="submit" data-submit>Επιβεβαίωση διαγραφής</button>', 'void', 'cancel');
 }
+function protectDeletionEnter(event) {
+  if (event.key !== 'Enter' || !event.target?.closest?.('input')) return;
+  const form = event.target.closest('form');
+  if (form?.dataset.kind !== 'void' && !(form?.dataset.kind === 'admin-day' && adminSlots().some(function(slot) { return slot.original && slot.remove; }))) return;
+  event.preventDefault(); modal.querySelector('button[data-action="close-modal"]')?.focus();
+}
+
 function openNote(day) {
   if (!isAdmin() || isArchiveView() || isArchiveView('stats') || !state.statsId) return;
   const note = state.stats?.days?.find(function(d) { return d.date === day; })?.note;
@@ -1741,7 +1755,7 @@ function openDevice(id) {
     submitButton(member ? 'Αποθήκευση υπολογιστή' : 'Δημιουργία υπολογιστή'), 'device-account');
 }
 function updateBulkSelection() {
-  if (!isAdmin() || isArchiveView()) return;
+  if (!isOwner() || isArchiveView()) return;
   const checked = document.querySelectorAll('.event-check:checked').length;
   const box = document.getElementById('bulk-bar'); if (!box) return;
   box.classList.remove('hidden');
@@ -1885,7 +1899,7 @@ async function handleAction(action, node) {
   if (action === 'admin-add-shift' || action === 'admin-add-break' || action === 'admin-remove-slot') {
     if (!isAdmin() || isArchiveView() || !state.adminDay) return;
     captureAdminDayFields();
-    if (action === 'admin-remove-slot') { const slot = adminSlots().find(function(s) { return s.key === node.dataset.key; }); if (slot && slot.original && !slot.readonly) slot.remove = !slot.remove; }
+    if (action === 'admin-remove-slot') { if (!isOwner()) return; const slot = adminSlots().find(function(s) { return s.key === node.dataset.key; }); if (slot && slot.original && !slot.readonly) slot.remove = !slot.remove; }
     else {
       if (adminSlots().length >= 80) { toast('Αποθήκευσε πρώτα τις υπάρχουσες ώρες πριν προσθέσεις περισσότερες.'); return; }
       if (action === 'admin-add-shift') { const group = newAdminShift(state.adminDay.date); group.breaks.push(newAdminBreak(group)); state.adminDay.groups.push(group); }
@@ -2030,8 +2044,13 @@ async function handleModalForm(form, decision) {
       const entries = adminDayEntriesFromForm(form);
       if (!entries.length) { closeModal(); toast('Δεν υπάρχουν νέες αλλαγές.'); return; }
       const reason = String(f.admin_reason?.value || '').trim();
-      const model = state.adminDay;
-      const response = await command('admin_day_save', { employee_id: model.employeeId, date: model.date, expected_revision: model.revision, entries, reason });
+      const model = state.adminDay, removals = entries.filter(function(entry) { return entry.remove; }).length;
+      if (removals && !isOwner()) throw new Error('Μόνο ο κύριος διαχειριστής μπορεί να διαγράφει καταγραφές.');
+      const password = removals > 1 ? String(f.deletion_password?.value || '') : null;
+      if (removals > 1 && !password) throw new Error('Συμπλήρωσε τον κωδικό του κύριου διαχειριστή για τη μαζική διαγραφή.');
+      let response;
+      try { response = await command('admin_day_save', { employee_id: model.employeeId, date: model.date, expected_revision: model.revision, entries, reason },false,null,password); }
+      finally { if (f.deletion_password) f.deletion_password.value = ''; }
       const result = response?.result || response || {};
       closeModal();
       toast(result.drafts?.length ? 'Οι ώρες αποθηκεύτηκαν. Οι πρόχειρες κινήσεις περιμένουν να συμπληρωθούν οι προϋποθέσεις τους.' : 'Οι ώρες ημέρας αποθηκεύτηκαν.', 'success');
@@ -2106,7 +2125,12 @@ async function handleModalForm(form, decision) {
       closeModal(); toast(state.modalArchived ? 'Ο εργαζόμενος αρχειοθετήθηκε.' : 'Ο εργαζόμενος επανήλθε.', 'success'); await refreshApp(); return;
     }
     if (kind === 'void') {
-      await command('event_void', { ids: state.modalVoidIds, reason: f.reason.value.trim() }); closeModal(); toast('Οι κινήσεις αφαιρέθηκαν από τους υπολογισμούς και διατηρούνται ως ακυρωμένες στο ιστορικό.', 'success'); await refreshApp(); return;
+      if (!isOwner()) throw new Error('Μόνο ο κύριος διαχειριστής μπορεί να διαγράφει καταγραφές.');
+      const password = state.modalVoidIds.length > 1 ? String(f.deletion_password?.value || '') : null;
+      if (state.modalVoidIds.length > 1 && !password) throw new Error('Συμπλήρωσε τον κωδικό του κύριου διαχειριστή για τη μαζική διαγραφή.');
+      try { await command('event_void', { ids: state.modalVoidIds, reason: f.reason.value.trim() },false,null,password); }
+      finally { if (f.deletion_password) f.deletion_password.value = ''; }
+      closeModal(); toast('Οι κινήσεις ακυρώθηκαν. Τις βλέπεις στις «Καταγραφές», με κατάσταση «Ακυρωμένη».', 'success'); await refreshApp(); return;
     }
     if (kind === 'note') {
       if (decision === 'delete') await command('note_delete', { employee_id: state.statsId, date: state.modalNoteDate });
@@ -2265,6 +2289,7 @@ document.addEventListener('paste', function(event) {
     if (input.dataset.dst) updateDstChoices(modal);
   } catch (error) { input.setCustomValidity?.(error.message); input.reportValidity?.(); }
 });
+modal.addEventListener('keydown', protectDeletionEnter);
 modal.addEventListener('cancel', function(event) {
   if (state.busy) event.preventDefault();
   else { state.correctionToken++; state.correctionGuidance = null; clearPasswords(modal); state.modalDevice = null; state.modalMember = null; state.modalBrowser = null; clearKioskSelection(); }

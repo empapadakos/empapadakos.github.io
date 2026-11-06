@@ -293,6 +293,19 @@ export function createTrackerApi({url, key, storageKey = 'time-tracker-next.auth
       try { return await authorizedRequest('/functions/v1/ttn-manage-accounts', {...payload,request_id:requestId}, {requestId,uncertain:true}); }
       catch (error) { if (error.uncertain) error.message = 'Δεν επιβεβαιώθηκε η αλλαγή. Ανανέωσε τους λογαριασμούς πριν προσπαθήσεις ξανά.'; throw error; }
     },
+    async authorizeDeletion({action,payload,request_id,password}) {
+      if (typeof password !== 'string' || !password || password.length > 1024) throw new TrackerError('Συμπλήρωσε τον κωδικό του κύριου διαχειριστή.', {code:'DELETE_PASSWORD_REQUIRED',status:400});
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request_id || '')) throw new Error('Invalid deletion UUID');
+      try {
+        const result = await authorizedRequest('/functions/v1/ttn-authorize-deletion',{action,payload,request_id,password},{requestId:request_id,uncertain:true});
+        if (result?.ok !== true) throw new TrackerError('Δεν επιβεβαιώθηκε η εξουσιοδότηση διαγραφής. Έλεγξε την ίδια ενέργεια πριν προσπαθήσεις ξανά.', {code:'DELETE_AUTH_UNKNOWN',status:503,uncertain:true,requestId:request_id});
+        return result;
+      } catch (error) {
+        if (error.code === 'DELETE_AUTH_UNAVAILABLE') error.uncertain = false;
+        error.deletionAuthorization = true;
+        throw error;
+      }
+    },
     async signOut() {
       const token = session?.access_token;
       generation++;

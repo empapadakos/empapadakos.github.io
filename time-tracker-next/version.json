@@ -1,7 +1,7 @@
 {
-  "version": "2.9.0",
+  "version": "2.10.0",
   "name": "Time Tracker v2",
-  "sourceCommit": "e82aa60952a6b9220eee44245b4f0c05ba63a890",
+  "sourceCommit": "bb0d64e47bc2bf0f31a84a76299d6671f85969e7",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",
@@ -20,8 +20,10 @@
     "time_tracker_next_optional_admin_time_reason",
     "time_tracker_next_break_insights",
     "time_tracker_next_departments",
-    "time_tracker_next_employee_visibility"
+    "time_tracker_next_employee_visibility",
+    "time_tracker_next_owner_attendance_deletion"
   ],
   "accountService": "ttn-manage-accounts",
-  "terminalService": "ttn-terminal"
+  "terminalService": "ttn-terminal",
+  "deletionService": "ttn-authorize-deletion"
 }

@@ -614,14 +614,14 @@ body.employee-kiosk {
 .overview-page .page-heading { align-items:center; gap:14px; margin-bottom:14px; }
 .overview-page .page-heading h1 { font-size:25px; margin-bottom:4px; }
 .overview-page .page-heading p { font-size:13px; }
-.overview-page .metric-grid { display:flex; flex-wrap:wrap; align-items:stretch; gap:0; width:fit-content; max-width:100%; margin:0 0 14px; border:1px solid var(--line); border-radius:9px; background:#fff; overflow:hidden; }
+.overview-page .metric-grid { display:flex; flex-wrap:wrap; align-items:stretch; gap:0; width:fit-content; max-width:100%; margin:0 auto 14px; border:1px solid var(--line); border-radius:9px; background:#fff; overflow:hidden; }
 .overview-page .metric { flex:0 0 auto; padding:8px 17px 9px; border:0; border-radius:0; background:transparent; }
 .overview-page .metric + .metric { border-left:1px solid var(--line); }
 .overview-page .metric-label { margin-bottom:3px; font-size:12px; }
 .overview-page .metric-value { font-size:24px; line-height:1.15; letter-spacing:-.4px; }
 .overview-page .metric-foot { display:none; }
 .overview-page .filter-row { gap:10px; margin-bottom:14px; }
-.overview-page .overview-columns { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; gap:10px; }
+.overview-page .overview-columns { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; gap:10px; }
 .overview-page .overview-group { min-width:0; min-height:0; padding:10px 8px 8px; border-radius:10px; background:#edf2f5; }
 .overview-page .overview-group h3 { align-items:center; gap:10px; margin:0 3px 9px; font-size:15px; }
 .overview-page .overview-people { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); align-items:start; gap:6px; }

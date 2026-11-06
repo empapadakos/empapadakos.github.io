@@ -321,10 +321,10 @@ function attendancePayload(action, payload) {
   return ATTENDANCE_ACTIONS.has(action) && epoch !== undefined && epoch !== null
     ? { ...payload, attendance_epoch: epoch } : payload;
 }
-async function command(action, payload, retry = false) {
+async function command(action, payload, retry = false, completionMessage = null) {
   if (state.busy) throw new Error('Περίμενε να ολοκληρωθεί η προηγούμενη ενέργεια.');
   if (state.pendingCommand && !retry) throw new Error('Έλεγξε πρώτα την τελευταία αποθήκευση από το μήνυμα στην κορυφή.');
-  const pending = retry ? state.pendingCommand : { action, payload: attendancePayload(action, payload), id: crypto.randomUUID(), email: state.context?.email };
+  const pending = retry ? state.pendingCommand : { action, payload: attendancePayload(action, payload), id: crypto.randomUUID(), email: state.context?.email, ...(completionMessage ? {completionMessage} : {}) };
   if (!pending) return null;
   savePending(pending); setBusy(true);
   try {
@@ -1384,24 +1384,47 @@ function guidedCorrectionEntryHtml(action, date) {
 function manualOperatorCorrectionHtml(date) {
   return '<section class="correction-entry" data-entry="0"><div class="correction-grid">' + selectField('Ενέργεια', 'entry_0_type', option('', 'Επίλεξε ενέργεια', '') + actionOptions(''), 'required') + dateTimeFields(null, 'entry_0', {emptyTime: true, date}) + '</div></section>';
 }
-async function recordAction(type) {
+function correctionCompletionMessage(type) {
+  const done = {clock_in:'έγινε είσοδος',clock_out:'έγινε έξοδος',break_start:'έγινε έναρξη διαλείμματος',break_end:'έγινε επιστροφή από διάλειμμα'};
+  return 'Οι διορθώσεις καταχωρήθηκαν και ' + done[type] + '.';
+}
+async function recordAction(type, {afterCorrection = false} = {}) {
   if (!canRecord() || !state.selectedId) return;
-  const id = state.selectedId;
+  const id = state.selectedId, session = state.sessionLoadToken, person = state.personToken;
+  const completionMessage = afterCorrection ? correctionCompletionMessage(type) : null;
   try {
-    const response = await command('record', { employee_id: id, type });
+    const response = await command('record', { employee_id: id, type }, false, completionMessage);
     const result = response?.result || response || {};
+    if (session !== state.sessionLoadToken || String(state.selectedId) !== String(id)) return;
     if (isOperator()) closeModal();
-    if (result.already_recorded) toast(result.message || (ACTIONS[type] + ' έχει ήδη οριστεί' + (result.event?.event_at ? ' στις ' + displayTime(result.event.event_at) : '') + '.'), 'success');
-    else toast(result.message || (ACTIONS[type] + ' καταγράφηκε.'), 'success');
+    if (result.already_recorded) toast((afterCorrection ? 'Οι διορθώσεις καταχωρήθηκαν. ' : '') + (result.message || (ACTIONS[type] + ' έχει ήδη οριστεί' + (result.event?.event_at ? ' στις ' + displayTime(result.event.event_at) : '') + '.')), 'success');
+    else toast(completionMessage || result.message || (ACTIONS[type] + ' καταγράφηκε.'), 'success');
     await loadView('record', true);
   } catch (error) {
+    if (session !== state.sessionLoadToken || person !== state.personToken || String(state.selectedId) !== String(id)) return;
     if (await recoverDatasetChanged(error)) return;
     if (state.browserGate || handleBrowserGate(error)) return;
-    if (error.uncertain) { if (isOperator()) closeModal(); toast('Η αποθήκευση δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
-    const suggestion = suggestionFrom(error, stateOf(state.employeeData), type);
-    if (suggestion.actions.length || suggestion.issue) { openCorrection(id, suggestion); return; }
-    // Authentication, transport and quota errors are not missing punches.
-    // Keep their actual error visible instead of inventing a correction type.
+    if (error.uncertain) { if (isOperator()) closeModal(); toast((afterCorrection ? 'Οι διορθώσεις καταχωρήθηκαν. ' : '') + 'Η αποθήκευση της ενέργειας δεν έχει επιβεβαιωθεί. Χρησιμοποίησε τον έλεγχο στην κορυφή.', 'error'); return; }
+    const code = error.details?.code || error.code;
+    if (['FLOW_INCOMPLETE', 'INVALID_SEQUENCE'].includes(code)) {
+      // A rejected punch may appear in the error's trial replay, but was never
+      // stored. Only persisted employee issues can be sent as gap guidance.
+      let data;
+      setBusy(true);
+      try { data = await api.read('employee', {employee_id:id}); }
+      catch (readError) { if (!handleBrowserGate(readError)) modalError(readError); return; }
+      finally { setBusy(false); }
+      if (session !== state.sessionLoadToken || person !== state.personToken || String(state.selectedId) !== String(id)) return;
+      if (String(data.employee?.id) !== String(id)) { modalError(new Error('Δεν φορτώθηκε ο εργαζόμενος. Δοκίμασε ξανά.')); return; }
+      state.employeeData = data; setServerTime(data.server_now);
+      const suggestion = correctionSuggestionForState(stateOf(data), type);
+      if (suggestion.actions.length || suggestion.issue) { openCorrection(id, suggestion); return; }
+      modalError(new Error('Η κατάσταση άλλαξε. Επίλεξε ξανά την ενέργεια που θέλεις.')); return;
+    }
+    if (afterCorrection) {
+      openModal('Η ενέργεια δεν καταγράφηκε', personName(id), banner(esc('Οι διορθώσεις καταχωρήθηκαν, αλλά η ενέργεια δεν καταγράφηκε. ' + error.message), 'error'), button('Δοκιμή ξανά', 'record-action', 'data-type="' + esc(type) + '" data-mutate', 'primary'), 'record-retry');
+      return;
+    }
     modalError(error);
   }
 }
@@ -1476,18 +1499,21 @@ async function completeCorrection(id, response, guidance, token, session) {
     catch (error) {
       if (session !== state.sessionLoadToken || token !== state.correctionToken) return;
       if (handleBrowserGate(error)) return;
-      closeModal(); toast('Η διόρθωση καταχωρίστηκε. Η νέα κατάσταση δεν φορτώθηκε· επίλεξε ξανά το όνομά σου.', 'success'); return;
+      closeModal(); toast('Η διόρθωση καταχωρήθηκε. Η νέα κατάσταση δεν φορτώθηκε· επίλεξε ξανά το όνομά σου.', 'success'); return;
     }
   }
   if (session !== state.sessionLoadToken || token !== state.correctionToken || !state.context || !modal.open) return;
   cacheCorrectionState(id, current, result.events, data);
   const next = correctionSuggestionForState(current, guidance?.requestedAction || null);
   if (next.issue || next.actions.length) {
-    next.notice = 'Η προηγούμενη διόρθωση καταχωρίστηκε και υπολογίζεται ήδη. Συνέχισε με την επόμενη εκκρεμότητα.';
+    next.notice = 'Οι διορθώσεις καταχωρήθηκαν και υπολογίζονται ήδη. Συνέχισε με την επόμενη εκκρεμότητα.';
     openCorrection(id, next);
     return;
   }
-  closeModal(); toast('Οι διορθώσεις καταχωρίστηκαν και υπολογίζονται ήδη. Μπορείς να συνεχίσεις.', 'success');
+  if (guidance?.requestedAction && String(state.selectedId) === String(id)) {
+    await recordAction(guidance.requestedAction, {afterCorrection:true}); return;
+  }
+  closeModal(); toast('Οι διορθώσεις καταχωρήθηκαν και υπολογίζονται ήδη. Μπορείς να συνεχίσεις.', 'success');
   await refreshApp();
 }
 async function refreshDuplicateCorrection(id, guidance, token, session, code = 'DUPLICATE_EVENT') {
@@ -1779,7 +1805,14 @@ async function handleAction(action, node) {
   if (action === 'retry-command') {
     if (!state.pendingCommand || state.busy) return;
     try {
-      await command(null, null, true); closeModal(); toast('Η αποθήκευση επιβεβαιώθηκε.', 'success'); await refreshApp();
+      const pending = state.pendingCommand, guidance = state.correctionGuidance;
+      const token = state.correctionToken, session = state.sessionLoadToken;
+      const response = await command(null, null, true);
+      if (pending.action === 'correction' && modal.open && String(state.modalEmployeeId) === String(pending.payload.employee_id) && token === state.correctionToken && session === state.sessionLoadToken) {
+        await completeCorrection(pending.payload.employee_id, response, guidance, token, session); return;
+      }
+      const result = response?.result || response || {};
+      closeModal(); toast(result.already_recorded ? ((pending.completionMessage ? 'Οι διορθώσεις καταχωρήθηκαν. ' : '') + (result.message || 'Η ενέργεια είχε ήδη καταγραφεί.')) : (pending.completionMessage || 'Η αποθήκευση επιβεβαιώθηκε.'), 'success'); await refreshApp();
     } catch (error) { if (await recoverDatasetChanged(error)) return; if (error.uncertain) toast('Δεν έχει επιβεβαιωθεί ακόμη. Δοκίμασε όταν επανέλθει η σύνδεση.', 'error'); else { toast(issueMessages(error), 'error'); await refreshApp(); } }
     return;
   }

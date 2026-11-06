@@ -403,7 +403,7 @@ body.employee-kiosk {
 .attendance-report-person p { color:#515773; font-size:14px; margin:0; }
 .attendance-kicker { display:block; color:#515773; font-size:12px; font-weight:650; letter-spacing:0; }
 .attendance-report .button.primary { min-height:40px; padding:9px 13px; font-size:14px; }
-.attendance-period-bar { display:grid; grid-template-columns:36px minmax(120px,1fr) 104px 36px; align-items:end; gap:9px; margin-bottom:14px; max-width:480px; }
+.attendance-period-bar { display:grid; grid-template-columns:36px minmax(120px,1fr) 36px 104px; align-items:end; gap:9px; margin-bottom:14px; max-width:480px; }
 .attendance-period-bar .field { min-width:0; gap:4px; }
 .attendance-period-bar .field label { color:var(--muted); font-size:12px; }
 .attendance-period-bar .field select { min-width:0; min-height:39px; padding:8px 10px; border-color:#d9dce8; color:var(--ink); font-size:14px; }
@@ -590,7 +590,7 @@ body.employee-kiosk {
   .attendance-report-person h2 { font-size:20px; }
   .attendance-report-person .avatar { width:41px; height:41px; font-size:16px; }
   .attendance-report .button.primary { min-height:39px; padding:9px 10px; font-size:13px; }
-  .attendance-period-bar { grid-template-columns:33px minmax(0,1fr) 85px 33px; gap:7px; }
+  .attendance-period-bar { grid-template-columns:33px minmax(0,1fr) 33px 85px; gap:7px; }
   .attendance-period-bar .icon-button { width:33px; }
   .attendance-period-bar .field select { padding-inline:7px; font-size:13px; }
   .attendance-options .field { flex-basis:100%; max-width:none; }
@@ -613,3 +613,12 @@ body.employee-kiosk {
 .attendance-break-summary { white-space:nowrap; }
 .attendance-page .attendance-add-movement { width:100%; justify-content:center; min-height:44px; border:1px solid #3b2cf4; color:#3324e8; font-size:15px; font-weight:650; }
 .attendance-day-note .note-chip { min-height:72px; display:block; text-align:left; }
+
+/* Bold text and one consistent, content-sized metric group. */
+body,body * { font-weight:700 !important; }
+.attendance-summary { gap:1px; background:#dedfea; margin-bottom:18px; }
+.attendance-summary-item { padding:11px 14px 12px; background:#f7f7fc; }
+.attendance-summary-item + .attendance-summary-item { border-left:0; }
+.attendance-table tbody tr.attendance-weekend > td { background:#f0f3fc; }
+.attendance-table tbody tr.attendance-weekend:hover > td { background:#e8edfc; }
+.attendance-table tbody tr.attendance-weekend.attendance-selected-day > td { background:#e8e4ff; }

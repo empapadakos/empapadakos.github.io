@@ -1,7 +1,7 @@
 {
-  "version": "2.6.0",
+  "version": "2.6.1",
   "name": "Time Tracker v2",
-  "sourceCommit": "1551e1a3fca3cf69ecadebc04f5bef1acff5e8a6",
+  "sourceCommit": "c28ddd638f0e9061c30ddfb663b9e735c3445c70",
   "build": "static-fingerprinted",
   "databaseMigrations": [
     "time_tracker_next_initial",

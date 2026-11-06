@@ -4,7 +4,7 @@ import { replay, effectiveEvents, planNext, monthlyStats, dateKey, formatTime, f
 
 const APP_NAME = 'Time Tracker v2';
 document.title = APP_NAME + (pageMode.admin ? ' · Διαχείριση' : '');
-const ACTIONS = { clock_in: 'Είσοδος', break_start: 'Έναρξη διαλείμματος', break_end: 'Επιστροφή', clock_out: 'Έξοδος' };
+const ACTIONS = { clock_in: 'Είσοδος', break_start: 'Έναρξη διαλείμματος', break_end: 'Επιστροφή από διάλειμμα', clock_out: 'Έξοδος' };
 const STATUS = { approved: 'Εγκεκριμένη', pending: 'Σε αναμονή', draft: 'Πρόχειρη', rejected: 'Απορρίφθηκε', void: 'Ακυρωμένη' };
 const ROLES = { admin: 'Πλήρης διαχείριση', reviewer: 'Προβολή αναφορών', operator: 'Τερματικό καταγραφής' };
 const NOTES = { note: 'Σημείωση', absence: 'Απουσία', leave: 'Άδεια', sick: 'Ασθένεια', day_off: 'Ρεπό' };
@@ -722,7 +722,7 @@ function renderKioskNames(employees) {
 function kioskActions(id) {
   const actions = [
     ['clock_in', '🚪 Είσοδος'], ['clock_out', '🚶 Έξοδος'],
-    ['break_start', '☕ Διάλειμμα Έναρξη'], ['break_end', '🔙 Διάλειμμα Επιστροφή']
+    ['break_start', '☕ Διάλειμμα Έναρξη'], ['break_end', '🔙 Επιστροφή από διάλειμμα']
   ];
   return '<div class="kiosk-action-grid">' + actions.map(function(action) {
     return '<button type="button" class="kiosk-action" data-action="record-action" data-type="' + action[0] + '" data-mutate>' + action[1] + '</button>';
@@ -743,7 +743,7 @@ function renderSelectedPerson() {
     '<div class="action-grid">' +
     '<button class="attendance-button clock-in" type="button" data-action="record-action" data-type="clock_in" data-mutate><span>↗</span>Είσοδος</button>' +
     '<button class="attendance-button break-start" type="button" data-action="record-action" data-type="break_start" data-mutate><span>☕</span>Έναρξη διαλείμματος</button>' +
-    '<button class="attendance-button break-end" type="button" data-action="record-action" data-type="break_end" data-mutate><span>↶</span>Επιστροφή</button>' +
+    '<button class="attendance-button break-end" type="button" data-action="record-action" data-type="break_end" data-mutate><span>↶</span>Επιστροφή από διάλειμμα</button>' +
     '<button class="attendance-button clock-out" type="button" data-action="record-action" data-type="clock_out" data-mutate><span>↗</span>Έξοδος</button></div>' +
     '<div class="actions">' + button('Αίτημα διόρθωσης', 'open-correction', 'data-id="' + esc(e.id) + '"', 'text') + (state.context.role === 'operator' ? '' : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'text')) + '</div>' +
     '<h3 class="muted">Τελευταίες κινήσεις</h3><ul class="recent-list">' + recent.map(function(ev) { return '<li><span>' + esc(ACTIONS[ev.type]) + (ev.status === 'pending' ? ' <small>· σε αναμονή</small>' : '') + '</span><span class="mono">' + esc(displayTime(ev.event_at)) + '<small> · ' + esc(displayDate(ev.event_at)) + '</small></span></li>'; }).join('') + '</ul>' +
@@ -1384,7 +1384,7 @@ function openCorrection(id, suggestion = null) {
     (isOperator() ? '' : banner('Καταχώρησε την πραγματική ώρα κάθε ελλείπουσας κίνησης. Η συνέχεια επιτρέπεται μόλις καλυφθούν όλες οι ελλείψεις.', '')) +
     '<div id="correction-entries">' + (guided ? guidedCorrectionEntryHtml(actions[0], defaultDate) : (isOperator() ? manualOperatorCorrectionHtml(defaultDate) : actions.map(function(action, index) { return correctionEntryHtml(index, action, null, defaultDate); }).join(''))) + '</div>' +
     (isOperator() ? '' : button('+ Προσθήκη κίνησης', 'add-correction-entry', '', 'text')) +
-    '<div class="field"><label for="f-reason">Σύντομη αιτιολογία (προαιρετική)</label><textarea id="f-reason" name="reason" maxlength="1000" placeholder="Π.χ. ξέχασα να καταγράψω την επιστροφή και την έξοδο."></textarea></div>';
+    '<div class="field"><label for="f-reason">Σύντομη αιτιολογία (προαιρετική)</label><textarea id="f-reason" name="reason" maxlength="1000" placeholder="Π.χ. ξέχασα να καταγράψω την επιστροφή από το διάλειμμα και την έξοδο."></textarea></div>';
   openModal(isOperator() ? '📝 Νέο Αίτημα Διόρθωσης' : 'Αίτημα διόρθωσης', personName(id), body, submitButton(isOperator() ? 'ΑΠΟΣΤΟΛΗ ΠΡΟΣ ADMIN' : 'Υποβολή διορθώσεων'), 'correction');
   state.correctionGuidance = suggestion ? {...suggestion, guided} : null;
 }

@@ -1,7 +1,7 @@
 /** Pure attendance rules and calendar calculations. The database is authoritative. */
 export const TIMEZONE = 'Europe/Athens';
 export const ACTIONS = Object.freeze(['clock_in', 'break_start', 'break_end', 'clock_out']);
-export const ACTION_LABELS = Object.freeze({clock_in:'Είσοδος',break_start:'Έναρξη διαλείμματος',break_end:'Επιστροφή',clock_out:'Έξοδος'});
+export const ACTION_LABELS = Object.freeze({clock_in:'Είσοδος',break_start:'Έναρξη διαλείμματος',break_end:'Επιστροφή από διάλειμμα',clock_out:'Έξοδος'});
 
 const NEXT = Object.freeze({OUT:{clock_in:'IN'},IN:{break_start:'ON_BREAK',clock_out:'OUT'},ON_BREAK:{break_end:'IN'}});
 const REQUIRED = Object.freeze({

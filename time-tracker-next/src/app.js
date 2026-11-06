@@ -496,7 +496,7 @@ function handleBrowserGate(error) {
 }
 function renderBrowserGate() {
   const gate = state.browserGate; if (!gate) return;
-  document.body.classList.remove('employee-kiosk', 'attendance-page', 'top-navigation');
+  document.body.classList.remove('employee-kiosk', 'attendance-page', 'overview-page', 'top-navigation');
   clearPasswords(app);
   const revoked = gate.status === 'revoked'; const unavailable = gate.status === 'unavailable';
   const notification = gate.notification?.status;
@@ -535,7 +535,7 @@ async function checkBrowserApproval() {
 }
 function renderLogin() {
   state.context = null;
-  document.body.classList.remove('employee-kiosk', 'attendance-page', 'top-navigation');
+  document.body.classList.remove('employee-kiosk', 'attendance-page', 'overview-page', 'top-navigation');
   clearPasswords(app);
   state.authMode = pageMode.admin ? 'admin' : 'device';
   const device = !pageMode.admin;
@@ -593,6 +593,7 @@ function renderShell() {
   document.body.classList.toggle('employee-kiosk', isOperator());
   document.body.classList.toggle('top-navigation', !isOperator());
   document.body.classList.toggle('attendance-page', state.view === 'stats' && !isOperator());
+  document.body.classList.toggle('overview-page', state.view === 'overview' && !isOperator());
   if (isOperator()) {
     app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ ' + esc(APP_NAME) + '</h1><nav class="kiosk-nav" aria-label="Κύρια πλοήγηση">' +
       adminIdleBadge() + '<button class="kiosk-nav-button active" type="button" data-action="kiosk-home" aria-current="page">🏠 Κατάστημα</button><a class="kiosk-nav-button kiosk-admin-link" href="' + esc(pageMode.adminUrl) + '">🔒 Διαχείριση</a></nav></header>' +
@@ -655,6 +656,7 @@ async function loadView(view, silent = false) {
 function renderCurrentView() {
   const main = document.getElementById('main'); if (!main) return;
   document.body.classList.toggle('attendance-page', state.view === 'stats' && !isOperator());
+  document.body.classList.toggle('overview-page', state.view === 'overview' && !isOperator());
   const renders = { record: renderRecord, overview: renderOverview, history: renderHistory, requests: renderRequests, stats: renderStats, employees: renderEmployees, settings: renderSettings, audit: renderAudit };
   main.innerHTML = (renders[state.view] || renderOverview)(); colorAvatars(); setBusy(state.busy); tick();
 }
@@ -749,22 +751,54 @@ function renderSelectedPerson() {
     '<h3 class="muted">Τελευταίες κινήσεις</h3><ul class="recent-list">' + recent.map(function(ev) { return '<li><span>' + esc(ACTIONS[ev.type]) + (ev.status === 'pending' ? ' <small>· σε αναμονή</small>' : '') + '</span><span class="mono">' + esc(displayTime(ev.event_at)) + '<small> · ' + esc(displayDate(ev.event_at)) + '</small></span></li>'; }).join('') + '</ul>' +
     '<p class="field-help">Οι διορθώσεις προσμετρώνται προσωρινά. Μπορείς να συνεχίσεις όταν έχουν καλυφθεί όλες οι ελλείψεις.</p>';
 }
+let breakDayCache = {key:'',start:0};
+function liveBreakTiming(startAt, closedMinutes, closedDate, limit) {
+  const current = now(), timestamp = Date.parse(startAt), key = dateKey(current);
+  if (!Number.isFinite(timestamp) || timestamp > current.getTime()) return null;
+  if (breakDayCache.key !== key) breakDayCache = {key,start:Date.parse(localToIso(key,'00:00'))};
+  const closed = closedDate === key ? Math.max(0,Number(closedMinutes) || 0) : 0;
+  const openToday = Math.max(0,current.getTime()-Math.max(timestamp,breakDayCache.start))/60000;
+  return {elapsed:Math.floor(Math.max(0,current.getTime()-timestamp)/60000),excess:Math.max(0,Math.round(closed+openToday-Math.max(0,Number(limit) || 0)))};
+}
+function liveBreakInfo(person, people = state.overview?.employees || []) {
+  const status = stateOf(person);
+  if (status.state !== 'ON_BREAK' || !status.open_break_at) return null;
+  const date = state.overview?.server_now ? dateKey(state.overview.server_now) : today();
+  const limit = state.context?.settings?.break_limit_minutes ?? 30;
+  const timing = liveBreakTiming(status.open_break_at,person.break_closed_today_minutes,date,limit);
+  if (!timing) return null;
+  const department = String(person.department || '').trim().toLocaleLowerCase('el-GR');
+  const colleagues = department && status.valid !== false ? people.filter(function(other) {
+    const peer = stateOf(other);
+    return String(other.id) !== String(person.id) && String(other.department || '').trim().toLocaleLowerCase('el-GR') === department && peer.valid !== false && peer.state === 'ON_BREAK' && Number.isFinite(Date.parse(peer.open_break_at)) && Date.parse(peer.open_break_at) <= now().getTime();
+  }) : [];
+  return {...timing,startAt:status.open_break_at,closed:person.break_closed_today_minutes || 0,date,limit,colleagues};
+}
+function updateLiveBreakExcess(element) {
+  const timing = liveBreakTiming(element.dataset.breakStart,element.dataset.breakClosed,element.dataset.breakDay,element.dataset.breakLimit);
+  const excess = timing?.excess || 0;
+  element.textContent = excess ? 'Υπέρβαση +' + excess + 'λ' : '';
+  element.classList.toggle('hidden',!excess);
+}
 function renderOverview() {
   const rows = state.overview?.employees || [];
   const groups = [['IN', 'Μέσα', 'green'], ['ON_BREAK', 'Σε διάλειμμα', 'amber'], ['OUT', 'Εκτός', '']];
   const counts = groups.map(function(g) { return rows.filter(function(e) { return stateOf(e).state === g[0]; }).length; });
-  return heading('Ζωντανή εικόνα', 'Η κατάσταση της ομάδας με εγκεκριμένες και εκκρεμείς διορθώσεις.') +
+  return '<div class="overview-content">' + heading('Ζωντανή εικόνα', 'Η κατάσταση της ομάδας με εγκεκριμένες και εκκρεμείς διορθώσεις.') +
     '<div class="metric-grid">' + metric('Μέσα στην εργασία', counts[0], 'Ενεργές βάρδιες') + metric('Σε διάλειμμα', counts[1], 'Ανοιχτά διαλείμματα') + metric('Εκτός', counts[2], 'Χωρίς ανοιχτή βάρδια') + metric('Εκκρεμείς διορθώσεις', state.overview?.pending_count || 0, 'Προς έλεγχο') + '</div>' +
     (rows.some(function(e) { return stateOf(e).valid === false; }) ? banner('Υπάρχουν ακολουθίες που χρειάζονται έλεγχο. Άνοιξε τον εργαζόμενο για τις ελλείψεις.', 'warning') : '') +
     '<div class="overview-columns">' + groups.map(function(g) {
       const list = rows.filter(function(e) { return stateOf(e).state === g[0]; });
-      return '<section class="overview-group"><h3>' + esc(g[1]) + '<span class="badge ' + g[2] + '">' + list.length + '</span></h3>' + (list.length ? list.map(function(e) {
-        const s = stateOf(e);
-        return '<button type="button" class="person-row" data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + avatar(e) +
-          '<div><span class="strong">' + esc(e.name) + '</span><small>' + esc(e.department || 'Ομάδα') + (s.open_break_at ? ' · <span data-elapsed="' + esc(s.open_break_at) + '"></span>' : '') + '</small></div>' +
-          (s.valid === false ? '<span class="badge red">Έλεγχος</span>' : pendingBadge(s.pending_count)) + '</button>';
-      }).join('') : '<p class="muted">Κανένας εργαζόμενος.</p>') + '</section>';
-    }).join('') + '</div><p class="footer-note">Ανανέωση ανά 30 δευτερόλεπτα · Ώρα Ελλάδας</p>';
+      return '<section class="overview-group"><h3>' + esc(g[1]) + '<span class="badge ' + g[2] + '">' + list.length + '</span></h3>' + (list.length ? '<div class="overview-people">' + list.map(function(e) {
+        const status = stateOf(e), info = liveBreakInfo(e,rows), together = Boolean(info?.colleagues.length);
+        const shared = together ? 'Ταυτόχρονο διάλειμμα με: ' + info.colleagues.map(function(peer) { return peer.name; }).join(', ') : '';
+        const startLabel = info ? (dateKey(info.startAt) === today() ? '' : displayDate(info.startAt).slice(0,5)+' ') + displayTime(info.startAt) : '';
+        return '<button type="button" class="person-row' + (together ? ' break-together' : '') + '"' + (shared ? ' title="' + esc(shared) + '"' : '') + ' data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + avatar(e) +
+          '<div><span class="strong overview-person-name">' + esc(e.name) + '</span><small>' + esc(e.department || 'Ομάδα') + (together ? ' · <span class="attendance-negative">Μαζί</span><span class="sr-only">' + esc(shared) + '</span>' : '') + '</small>' +
+          (info ? '<small class="overview-break-start">από <time datetime="' + esc(info.startAt) + '">' + esc(startLabel) + '</time> · <span data-elapsed="' + esc(info.startAt) + '">' + esc(formatMinutes(info.elapsed)) + '</span> <span class="overview-break-excess attendance-negative' + (!info.excess ? ' hidden' : '') + '" data-live-break data-break-start="' + esc(info.startAt) + '" data-break-closed="' + esc(info.closed) + '" data-break-day="' + esc(info.date) + '" data-break-limit="' + esc(info.limit) + '">' + (info.excess ? 'Υπέρβαση +' + info.excess + 'λ' : '') + '</span></small>' : '') + '</div>' +
+          (status.valid === false ? '<span class="badge red">Έλεγχος</span>' : pendingBadge(status.pending_count)) + '</button>';
+      }).join('') + '</div>' : '<p class="muted">Κανένας εργαζόμενος.</p>') + '</section>';
+    }).join('') + '</div><p class="footer-note">Ανανέωση ανά 30 δευτερόλεπτα · Ώρα Ελλάδας</p></div>';
 }
 function metric(label, value, foot) { return '<div class="metric"><div class="metric-label">' + esc(label) + '</div><div class="metric-value mono">' + esc(value) + '</div><div class="metric-foot">' + esc(foot) + '</div></div>'; }
 function filteredHistory() {
@@ -1021,8 +1055,12 @@ function statsNoteCell(day, canEdit) {
     (canEdit ? '</button>' : '</span>');
 }
 function statsDayDrafts(day, rawEvents) { return rawEvents.filter(function(e) { return e.status === 'draft' && (e.admin_day || dateKey(e.event_at)) === day.date; }); }
+function sharedBreakNoteHtml(day) {
+  const names = (day.shared_break_colleagues || []).map(function(person) { return person.name; });
+  return names.length ? '<span class="attendance-shared-break-note">Μαζί σε διάλειμμα με: ' + esc(names.join(', ')) + '</span>' : '';
+}
 function statsNeedsAttention(day, rawEvents) {
-  return Boolean(day.pending_count || day.issues.length || day.shortfall_minutes || day.break_excess_minutes || day.late_minutes || day.early_departure_minutes || statsDayDrafts(day, rawEvents).length || (day.has_open_shift && day.date < today()));
+  return Boolean(day.shared_break_colleagues?.length || day.pending_count || day.issues.length || day.shortfall_minutes || day.break_excess_minutes || day.late_minutes || day.early_departure_minutes || statsDayDrafts(day, rawEvents).length || (day.has_open_shift && day.date < today()));
 }
 function statsHasPresence(day, preview) { return Boolean(day.shifts.length || preview.shifts.length); }
 function statsDayStatus(day, preview, rawEvents) {
@@ -1056,7 +1094,7 @@ function statsDayRow(day, preview, rawEvents) {
     (day.shortfall_minutes > 0 ? '<small class="attendance-negative">−' + Math.round(day.shortfall_minutes) + ' λ από το ' + (day.target_minutes === 480 ? '8ωρο' : esc(formatMinutes(day.target_minutes))) + '</small>' : '') +
     (day.has_open_shift ? '<small>Ανοιχτή: ' + esc(formatMinutes(day.estimated_open_minutes)) + '</small>' : '') +
     (planned && preview.gross_minutes ? '<small class="planned-line">Ορισμένη παρουσία: ' + esc(formatMinutes(preview.gross_minutes)) + '</small>' : '') + '</td>' +
-    '<td><div class="attendance-day-status">' + statsDayStatus(day, preview, rawEvents) + '</div></td></tr>';
+    '<td><div class="attendance-day-status">' + statsDayStatus(day, preview, rawEvents) + '</div></td><td>' + (sharedBreakNoteHtml(day) || '<span class="attendance-empty-label">—</span>') + '</td></tr>';
 }
 const ATTENDANCE_EDIT_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1L20 7a2 2 0 0 0-4-4L4 15Z"/></svg>';
 function statsMovementParts(value, id, day, type, refs, generated = false) {
@@ -1109,9 +1147,9 @@ function statsDayPanel(day, preview, rawEvents, rawById, canEdit) {
     (periods || '<div class="attendance-day-empty"><span aria-hidden="true">◷</span><p>Δεν υπάρχουν παρουσίες.</p>' + (canEdit ? timeCell(null,null,state.statsId,{date:day.date,type:'clock_in'}) : '') + '</div>') +
     (extra.length ? '<section class="attendance-detail-extra"><h3>Πρόσθετες κινήσεις</h3><ol class="attendance-timeline">' + [...extra].sort(function(a,b) { return Date.parse(a.event_at)-Date.parse(b.event_at); }).map(function(e) { return statsTimelineEntry(e.type,e.event_at,e.id,day,{shift_ref:e.shift_ref,break_ref:e.break_ref},rawById,e.status === 'draft' ? '<span class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' · εκτός συνόλων</span>' : (e.status === 'pending' && state.statsMode === 'approved' ? 'Εκκρεμής · εκτός εγκεκριμένων συνόλων' : 'Χρειάζεται έλεγχο')); }).join('') + '</ol></section>' : '') +
     (canEdit ? '<div class="attendance-detail-actions">' + button('+ Προσθήκη κίνησης','admin-day',attrs,'attendance-add-movement') + '</div>' : '') +
-    '<section class="attendance-day-note"><h3>Σημείωση ημέρας</h3>' + statsNoteCell(day, canEdit) + '</section></aside>';
+    '<section class="attendance-day-note"><h3>Σημείωση ημέρας</h3>' + sharedBreakNoteHtml(day) + statsNoteCell(day, canEdit) + '</section></aside>';
 }
-function statsTableHeader() { return '<tr><th scope="col">Ημέρα</th><th scope="col">Παρουσίες</th><th scope="col">Διαλείμματα</th><th scope="col">Ώρες</th><th scope="col">Κατάσταση</th></tr>'; }
+function statsTableHeader() { return '<tr><th scope="col">Ημέρα</th><th scope="col">Παρουσίες</th><th scope="col">Διαλείμματα</th><th scope="col">Ώρες</th><th scope="col">Κατάσταση</th><th scope="col">Σημείωση</th></tr>'; }
 function statsSummary(totals, pending, target = 480) {
   const deficitLabel = Number(target) === 480 ? 'Έλλειμμα 8ώρου' : 'Έλλειμμα στόχου';
   const metrics = [['presence','Ώρες παρουσίας',statsHours(totals.gross_minutes),0],['worked_days','Ημέρες παρουσίας',totals.worked_days || 0,0],['breaks','Διαλείμματα',formatMinutes(totals.break_minutes),0],['late_days','Ημέρες αργοπορίας',totals.late_days || 0,totals.late_days],[ 'shortfall',deficitLabel,formatMinutes(totals.shortfall_minutes),totals.shortfall_minutes],['break_excess','Υπέρβαση διαλειμμάτων',formatMinutes(totals.break_excess_minutes),totals.break_excess_minutes],['combined','Συνολική απόκλιση',formatMinutes(totals.combined_deviation_minutes),totals.combined_deviation_minutes]];
@@ -1123,6 +1161,8 @@ function renderStats() {
   const options = {month:state.month,employee:data?.employee,notes:data?.notes || [],settings:data?.settings || state.context.settings,now:now(),includePending:state.statsMode === 'effective'};
   state.stats = data && state.statsId ? monthlyStats(data.events || [], options) : null;
   const stats = state.stats, projected = stats ? monthlyStats(data.events || [], {...options,includeScheduled:true}) : null;
+  const sharedDays = data?.shared_breaks?.[state.statsMode] || {};
+  for (const day of stats?.days || []) day.shared_break_colleagues = Array.isArray(sharedDays[day.date]) ? sharedDays[day.date].filter(function(person) { return person && typeof person.name === 'string' && String(person.id) !== String(state.statsId); }) : [];
   const previewDays = new Map((projected?.days || []).map(function(day) { return [day.date,day]; }));
   const rawEvents = data?.events || [], rawById = new Map(rawEvents.map(function(e) { return [String(e.id),e]; }));
   const due = readOnly ? [] : rawEvents.filter(isScheduledEvent).map(function(e) { return Date.parse(e.event_at); });
@@ -1154,7 +1194,7 @@ function renderStats() {
     (stats?.issues?.length ? banner('Υπάρχουν κινήσεις που χρειάζονται έλεγχο. Επίλεξε «Χρειάζονται έλεγχο» για να τις δεις.','warning') : '') +
     (rawEvents.some(function(e) { return e.source === 'history_cleanup'; }) ? '<p class="field-help">* Εκτιμώμενη παλιά ώρα που συμπληρώθηκε κατά την τακτοποίηση του ιστορικού.</p>' : '') +
     (stats ? statsSummary(stats.totals,stats.has_pending && state.statsMode === 'effective',options.settings?.shift_target_minutes ?? 480) + '<div class="attendance-table-toolbar"><div class="attendance-row-filters" role="group" aria-label="Φίλτρο ημερών">' + [['all','Όλες οι ημέρες',days.length],['present','Με παρουσία',days.filter(function(d) { return statsHasPresence(d,previewDays.get(d.date) || d); }).length],['attention','Χρειάζονται προσοχή',attention.length]].map(function(item) { return '<button type="button" data-action="stats-filter-days" data-filter="' + item[0] + '" aria-pressed="' + (state.statsFilter === item[0]) + '">' + item[1] + ' <span>' + item[2] + '</span></button>'; }).join('') + '</div>' + button('↓ Εξαγωγή','export-stats',stats ? '' : 'disabled','small') + '</div>' +
-    (visibleDays.length ? '<div class="table-wrap attendance-table-wrap" tabindex="0" aria-label="Μηνιαίο παρουσιολόγιο"><table class="attendance-table"><thead>' + statsTableHeader() + '</thead><tbody>' + visibleDays.map(function(day) { return statsDayRow(day,previewDays.get(day.date) || day,rawEvents); }).join('') + '</tbody><tfoot>' + statsTableHeader() + '<tr class="attendance-month-totals"><th scope="row">Σύνολα μήνα</th><td>' + stats.totals.worked_days + ' ημέρες</td><td class="mono">' + esc(formatMinutes(stats.totals.break_minutes)) + '</td><td class="mono">' + esc(formatMinutes(stats.totals.gross_minutes)) + '</td><td><small>Συνολική απόκλιση</small><strong class="mono' + (stats.totals.combined_deviation_minutes ? ' attendance-negative' : '') + '">' + esc(formatMinutes(stats.totals.combined_deviation_minutes)) + '</strong></td></tr></tfoot></table></div><p class="attendance-table-hint">Επίλεξε μια ημέρα για όλες τις καταγραφές και τις σημειώσεις της.</p>' : empty('Δεν υπάρχουν ημέρες με αυτό το φίλτρο','Επίλεξε «Όλες» για να δεις ολόκληρο τον μήνα.')) : empty('Επίλεξε μήνα και εργαζόμενο','Τα σύνολα και οι καθημερινές καταγραφές θα εμφανιστούν εδώ.')) +
+    (visibleDays.length ? '<div class="table-wrap attendance-table-wrap" tabindex="0" aria-label="Μηνιαίο παρουσιολόγιο"><table class="attendance-table"><thead>' + statsTableHeader() + '</thead><tbody>' + visibleDays.map(function(day) { return statsDayRow(day,previewDays.get(day.date) || day,rawEvents); }).join('') + '</tbody><tfoot>' + statsTableHeader() + '<tr class="attendance-month-totals"><th scope="row">Σύνολα μήνα</th><td>' + stats.totals.worked_days + ' ημέρες</td><td class="mono">' + esc(formatMinutes(stats.totals.break_minutes)) + '</td><td class="mono">' + esc(formatMinutes(stats.totals.gross_minutes)) + '</td><td><small>Συνολική απόκλιση</small><strong class="mono' + (stats.totals.combined_deviation_minutes ? ' attendance-negative' : '') + '">' + esc(formatMinutes(stats.totals.combined_deviation_minutes)) + '</strong></td><td></td></tr></tfoot></table></div><p class="attendance-table-hint">Επίλεξε μια ημέρα για όλες τις καταγραφές και τις σημειώσεις της.</p>' : empty('Δεν υπάρχουν ημέρες με αυτό το φίλτρο','Επίλεξε «Όλες» για να δεις ολόκληρο τον μήνα.')) : empty('Επίλεξε μήνα και εργαζόμενο','Τα σύνολα και οι καθημερινές καταγραφές θα εμφανιστούν εδώ.')) +
     '</section>' + statsDayPanel(selectedDay,previewDays.get(selectedDay?.date) || selectedDay,rawEvents,rawById,canEdit) + '</div><p class="footer-note">Ημερολογιακή κατανομή σε ώρα Ελλάδας · οι νυχτερινές παρουσίες συνδέονται μεταξύ ημερών. Η διαφορά από τον στόχο δεν αποτελεί υπολογισμό νόμιμης υπερωρίας.</p>';
 }
 function renderEmployees() {
@@ -1977,6 +2017,7 @@ function tick() {
     const seconds = Math.max(0, Math.floor((now().getTime() - Date.parse(el.dataset.elapsed)) / 1000));
     el.textContent = formatMinutes(Math.floor(seconds / 60));
   });
+  document.querySelectorAll('[data-live-break]').forEach(updateLiveBreakExcess);
   const ctx = state.context;
   if (ctx && state.view === 'stats' && state.nextScheduledRefresh && now().getTime() >= state.nextScheduledRefresh && !state.busy && !modal.open && !document.hidden) {
     state.nextScheduledRefresh = 0;

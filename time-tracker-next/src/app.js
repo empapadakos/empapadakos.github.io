@@ -181,19 +181,21 @@ function datasetField(view) {
 function archiveNotice() { return banner('Παλιό ιστορικό · μόνο προβολή. Οι νέες καταγραφές και τα σύνολά τους εμφανίζονται χωριστά.'); }
 function now() { return new Date(Date.now() + state.serverOffset); }
 function today() { return dateKey(now()); }
-function employee(id) { return state.context?.employees?.find(function(e) { return String(e.id) === String(id); }); }
-function activeEmployees() { return (state.context?.employees || []).filter(function(e) { return !e.archived; }); }
+function employee(id) { return state.context?.employees?.find(function(e) { return !e.deleted_at && String(e.id) === String(id); }); }
+function visibleEmployees(includeArchived = false) { return (state.context?.employees || []).filter(function(e) { return !e.deleted_at && (includeArchived || !e.archived); }).sort(function(a,b) { return Number(Boolean(a.archived))-Number(Boolean(b.archived)); }); }
+function activeEmployees() { return visibleEmployees(); }
 function reconcileSelections() {
   if (!archiveAvailable()) {
     if (state.historyDataset !== 'current') state.historyData = null;
     if (state.statsDataset !== 'current') { state.monthData = null; state.stats = null; }
     state.historyDataset = 'current'; state.statsDataset = 'current';
   }
-  const rows = state.context?.employees || [];
-  const first = rows.find(function(e) { return !e.archived; }) || rows[0];
-  if (!rows.some(function(e) { return String(e.id) === String(state.historyId); })) { state.historyId = first?.id || ''; state.historyData = null; }
-  if (!rows.some(function(e) { return String(e.id) === String(state.statsId); })) { state.statsId = first?.id || ''; state.monthData = null; state.stats = null; }
+  const rows = visibleEmployees(true);
+  const first = activeEmployees()[0];
+  if (!rows.some(function(e) { return (state.showArchived || !e.archived) && String(e.id) === String(state.historyId); })) { state.historyId = first?.id || ''; state.historyData = null; }
+  if (!rows.some(function(e) { return (state.statsShowArchived || !e.archived) && String(e.id) === String(state.statsId); })) { state.statsId = visibleEmployees(state.statsShowArchived)[0]?.id || ''; state.monthData = null; state.stats = null; }
   if (!rows.some(function(e) { return !e.archived && String(e.id) === String(state.selectedId); })) { state.selectedId = ''; state.employeeData = null; }
+  if (state.requestEmployee && !activeEmployees().some(function(e) { return String(e.id) === String(state.requestEmployee); })) { state.requestEmployee = ''; state.requests = null; }
 }
 function personName(id) { return employee(id)?.name || 'Εργαζόμενος'; }
 function initials(name) { return String(name || '').trim().split(/\s+/).slice(0, 2).map(function(p) { return p[0] || ''; }).join('').toLocaleUpperCase('el-GR'); }
@@ -249,10 +251,17 @@ function badgeForState(value) {
 function statusBadge(status) { return '<span class="badge ' + ({ pending: 'amber', approved: 'green', rejected: 'red' }[status] || '') + '">' + esc(STATUS[status] || status) + '</span>'; }
 function isScheduledEvent(event) { return event?.source === 'admin' && event.status === 'approved' && Date.parse(event.event_at) > now().getTime(); }
 function eventStatusBadge(event) { return isScheduledEvent(event) ? '<span class="badge planned">Ορισμένη ώρα</span>' : statusBadge(event.status); }
+function updateRequestCounter(value) {
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return;
+  const count = Math.max(0,Number(value));
+  if (state.context) state.context.pending_count = count;
+  if (state.overview) state.overview.pending_count = count;
+  const badge = document.getElementById('request-counter'); if (badge) badge.textContent = String(count);
+}
 function pendingBadge(count, employeeId = null, label = null) {
   if (!count) return '';
   const text = label || count + ' σε αναμονή';
-  if (employeeId && ['admin','reviewer'].includes(state.context?.role) && !isArchiveView()) {
+  if (employeeId && !employee(employeeId)?.archived && ['admin','reviewer'].includes(state.context?.role) && !isArchiveView()) {
     return '<button type="button" class="badge amber request-link" data-action="open-requests" data-employee="' + esc(employeeId) + '" aria-label="' + esc('Εκκρεμείς διορθώσεις: ' + personName(employeeId)) + '">' + esc(text) + '</button>';
   }
   return '<span class="badge amber">' + esc(text) + '</span>';
@@ -270,9 +279,9 @@ function colorAvatars() {
   });
 }
 function option(value, label, selected) { return '<option value="' + esc(value) + '"' + (String(value) === String(selected) ? ' selected' : '') + '>' + esc(label) + '</option>'; }
-function employeeOptions(selected, includeAll = false) {
+function employeeOptions(selected, includeAll = false, includeArchived = false) {
   return (includeAll ? option('', 'Όλοι οι εργαζόμενοι', selected) : '') +
-    (state.context?.employees || []).map(function(e) { return option(e.id, e.name + (e.archived ? ' · Αρχείο' : ''), selected); }).join('');
+    visibleEmployees(includeArchived).map(function(e) { return option(e.id,e.name + (e.archived ? ' · Αρχείο' : ''),selected); }).join('');
 }
 function actionOptions(selected) { return Object.entries(ACTIONS).map(function(pair) { return option(pair[0], pair[1], selected); }).join(''); }
 function loading() { return '<div class="loading"><span class="spinner"></span>Φόρτωση…</div>'; }
@@ -573,7 +582,7 @@ async function enterApp({freshAdmin = false} = {}) {
   }
   if (!syncAdminIdle(context, freshAdmin)) { if (state.sessionReloadPending) return; await api.signOut(); state.authMessage = ADMIN_IDLE_MESSAGE; renderLogin(); return; }
   state.browserGate = null; state.browserPollAt = 0;
-  state.context = context; setServerTime(context.server_now);
+  state.context = context; setServerTime(context.server_now); updateRequestCounter(context.pending_count);
   if (legacyAdministrativeContext(context)) state.lastActivity = Date.now();
   restorePending(); state.view = pageMode.admin ? 'overview' : (VIEWS.find(function(v) { return v[3].includes(context.role); })?.[0] || 'overview');
   if (state.pendingBrowserRequest && isOwner()) state.view = 'settings';
@@ -585,7 +594,7 @@ async function enterApp({freshAdmin = false} = {}) {
 function attendanceShell(context) {
   const views = VIEWS.filter(function(view) { return view[3].includes(context.role); });
   function nav(view) {
-    return '<button type="button" class="nav-button' + (view[0] === state.view ? ' active' : '') + '" data-action="navigate" data-view="' + view[0] + '"' + (view[0] === state.view ? ' aria-current="page"' : '') + '><span class="nav-label">' + esc(view[1]) + '</span>' + (view[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
+    return '<button type="button" class="nav-button' + (view[0] === state.view ? ' active' : '') + '" data-action="navigate" data-view="' + view[0] + '"' + (view[0] === state.view ? ' aria-current="page"' : '') + '><span class="nav-label">' + esc(view[1]) + '</span>' + (view[0] === 'requests' ? '<span class="nav-counter" id="request-counter">' + esc(state.context?.pending_count ?? state.overview?.pending_count ?? '—') + '</span>' : '') + '</button>';
   }
   const clock = '<svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="16" cy="16" r="13"/><path d="M16 8v8h8"/></svg>';
   return '<div class="shell"><header class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">' + clock + '</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + views.map(nav).join('') + '</nav>' +
@@ -650,7 +659,7 @@ async function loadView(view, silent = false) {
     if (!isCurrent()) return;
     if ((updates.historyData && dataDataset(updates.historyData) !== selection.historyDataset) || (updates.monthData && dataDataset(updates.monthData) !== selection.statsDataset)) throw new Error('Δεν φορτώθηκε το επιλεγμένο ιστορικό. Δοκίμασε ανανέωση.');
     Object.assign(state, updates); setServerTime(serverTime);
-    if (updates.overview) { const count = document.getElementById('request-counter'); if (count) count.textContent = String(updates.overview.pending_count || 0); }
+    updateRequestCounter(updates.overview?.pending_count ?? updates.requests?.pending_count ?? state.context?.pending_count);
     renderCurrentView(); setConnection(true);
   } catch (error) {
     if (!isCurrent()) return;
@@ -686,7 +695,7 @@ async function refreshApp() {
       return;
     }
     if (!syncAdminIdle(context)) { if (state.sessionReloadPending) return; await logout(ADMIN_IDLE_MESSAGE); return; }
-    state.context = context; setServerTime(context.server_now);
+    state.context = context; setServerTime(context.server_now); updateRequestCounter(context.pending_count);
     if (expireAdminIdle()) return;
     reconcileSelections();
     if (!VIEWS.some(function(v) { return v[0] === state.view && v[3].includes(context.role); })) state.view = VIEWS.find(function(v) { return v[3].includes(context.role); })[0];
@@ -788,7 +797,7 @@ function updateLiveBreakExcess(element) {
   element.classList.toggle('hidden',!excess);
 }
 function renderOverview() {
-  const rows = state.overview?.employees || [];
+  const rows = (state.overview?.employees || []).filter(function(e) { return !e.archived && !e.deleted_at; });
   const groups = [['IN', 'Μέσα', 'green'], ['ON_BREAK', 'Σε διάλειμμα', 'amber'], ['OUT', 'Εκτός', '']];
   const counts = groups.map(function(g) { return rows.filter(function(e) { return stateOf(e).state === g[0]; }).length; });
   return '<div class="overview-content">' + heading('Ζωντανή εικόνα', 'Η κατάσταση της ομάδας με εγκεκριμένες και εκκρεμείς διορθώσεις.') +
@@ -800,10 +809,10 @@ function renderOverview() {
         const status = stateOf(e), info = liveBreakInfo(e,rows), together = Boolean(info?.colleagues.length);
         const shared = together ? 'Ταυτόχρονο διάλειμμα με: ' + info.colleagues.map(function(peer) { return peer.name; }).join(', ') : '';
         const startLabel = info ? (dateKey(info.startAt) === today() ? '' : displayDate(info.startAt).slice(0,5)+' ') + displayTime(info.startAt) : '';
-        return '<button type="button" class="person-row' + (together ? ' break-together' : '') + '"' + (shared ? ' title="' + esc(shared) + '"' : '') + ' data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + avatar(e) +
-          '<div><span class="strong overview-person-name">' + esc(e.name) + '</span><small>' + esc(e.department || 'Ομάδα') + (together ? ' · <span class="attendance-negative">Μαζί</span><span class="sr-only">' + esc(shared) + '</span>' : '') + '</small>' +
+        return '<button type="button" class="person-row' + (together ? ' break-together' : '') + '"' + (shared ? ' title="' + esc(shared) + '"' : '') + ' data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + '<div class="overview-person-main">' + avatar(e) +
+          '<div class="overview-person-text"><span class="strong overview-person-name">' + esc(e.name) + '</span><small>' + esc(e.department || 'Ομάδα') + (together ? ' · <span class="attendance-negative">Μαζί</span><span class="sr-only">' + esc(shared) + '</span>' : '') + '</small>' +
           (info ? '<small class="overview-break-start">από <time datetime="' + esc(info.startAt) + '">' + esc(startLabel) + '</time> · <span data-elapsed="' + esc(info.startAt) + '">' + esc(formatMinutes(info.elapsed)) + '</span> <span class="overview-break-excess attendance-negative' + (!info.excess ? ' hidden' : '') + '" data-live-break data-break-start="' + esc(info.startAt) + '" data-break-closed="' + esc(info.closed) + '" data-break-day="' + esc(info.date) + '" data-break-limit="' + esc(info.limit) + '">' + (info.excess ? 'Υπέρβαση +' + info.excess + 'λ' : '') + '</span></small>' : '') + '</div>' +
-          (status.valid === false ? '<span class="badge red">Έλεγχος</span>' : pendingBadge(status.pending_count)) + '</button>';
+          '</div>' + ((status.valid === false || status.pending_count) ? '<div class="overview-person-footer">' + (status.valid === false ? '<span class="badge red">Έλεγχος</span>' : '') + pendingBadge(status.pending_count) + '</div>' : '') + '</button>';
       }).join('') + '</div>' : '<p class="muted">Κανένας εργαζόμενος.</p>') + '</section>';
     }).join('') + '</div><p class="footer-note">Ανανέωση ανά 30 δευτερόλεπτα · Ώρα Ελλάδας</p></div>';
 }
@@ -822,22 +831,23 @@ function renderHistory() {
   const readOnly = isArchiveView('history');
   const canEdit = isAdmin() && !readOnly;
   const rows = filteredHistory();
-  const filters = '<div class="filter-row">' + datasetField('history') + selectField('Εργαζόμενος', 'history_employee', employeeOptions(state.historyId)) +
+  const filters = '<div class="filter-row">' + datasetField('history') + selectField('Εργαζόμενος', 'history_employee', employeeOptions(state.historyId,false,state.showArchived)) +
     field('Από', 'history_from', state.historyFrom, 'date') + field('Έως', 'history_to', state.historyTo, 'date') +
     selectField('Κατάσταση', 'history_status', option('', 'Όλες', state.historyStatus) + Object.entries(STATUS).map(function(p) { return option(p[0], p[1], state.historyStatus); }).join('')) +
     selectField('Ενέργεια', 'history_type', option('', 'Όλες', state.historyType) + Object.entries(ACTIONS).map(function(p) { return option(p[0], p[1], state.historyType); }).join('')) + '</div>';
   return heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() && !readOnly ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
-    '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canEdit ? '<div id="bulk-bar" class="bulk-bar hidden"><span id="bulk-label"></span>' + button('Ακύρωση επιλεγμένων', 'void-selected', 'data-mutate', 'danger small') + '</div>' : '') +
+    '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canEdit ? '<div id="bulk-bar" class="bulk-bar history-delete-bar"><span id="bulk-label">0 επιλεγμένες κινήσεις</span>' + button('Διαγραφή επιλεγμένων', 'void-selected', 'id="delete-selected-events" disabled', 'danger small') + '</div>' : '') +
     (state.historyData?.history_limited ? '<p class="field-help">Στο τερματικό εμφανίζονται έως 200 πρόσφατες κινήσεις. Το πλήρες ιστορικό είναι διαθέσιμο στη διαχείριση.</p>' : '') +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr>' + (canEdit ? '<th><input type="checkbox" id="select-all-events" aria-label="Επιλογή όλων"></th>' : '') + '<th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th>Ενέργειες</th><th class="history-selection-col"><label class="check-label"><input type="checkbox" id="select-all-events" data-mutate aria-label="Επιλογή όλων των εμφανιζόμενων κινήσεων που μπορούν να διαγραφούν">Επιλογή όλων</label></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
       const editable = ['approved', 'pending'].includes(ev.status);
-      return '<tr>' + (canEdit ? '<td>' + (editable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" aria-label="Επιλογή κίνησης">' : '') + '</td>' : '') +
-        '<td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'history_cleanup' ? '<small class="shift-line">Εκτιμώμενη παλιά ώρα</small>' : (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '')) + '</td>' +
-        (canEdit ? '<td>' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + '</td>' : '') + '</tr>';
-    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρώσεις διατηρούνται στο ιστορικό.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
+      const deletable = ['approved', 'pending', 'draft'].includes(ev.status);
+      return '<tr><td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'history_cleanup' ? '<small class="shift-line">Εκτιμώμενη παλιά ώρα</small>' : (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '')) + '</td>' +
+        (canEdit ? '<td><div class="actions">' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + (deletable ? button('Διαγραφή', 'delete-history-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'danger small') : '') + '</div></td><td class="history-selection-col">' + (deletable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" data-mutate aria-label="' + esc('Επιλογή κίνησης: ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '">' : '') + '</td>' : '') + '</tr>';
+    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι διαγραμμένες κινήσεις διατηρούνται ως ακυρωμένες για έλεγχο.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
 }
+function visibleRequestRows() { return (state.requests?.events || []).filter(function(ev) { return !(state.context?.employees || []).some(function(e) { return String(e.id) === String(ev.employee_id) && (e.archived || e.deleted_at); }); }); }
 function pendingRequestRows() {
-  return (state.requests?.events || []).filter(function(ev) {
+  return visibleRequestRows().filter(function(ev) {
     return ev.status === 'pending' && (!state.requestEmployee || String(ev.employee_id) === String(state.requestEmployee)) && (!state.requestStatus || ['all','pending'].includes(state.requestStatus));
   });
 }
@@ -862,16 +872,17 @@ function requestBulkSummaryHtml() {
   return banner(message,result.failed.length || result.uncertain ? 'warning' : 'success');
 }
 function renderRequests() {
-  const rows = state.requests?.events || [], pending = reconcileRequestSelection(), bulk = isAdmin();
+  const rows = visibleRequestRows(), pending = reconcileRequestSelection(), bulk = isAdmin();
   const selected = state.requestSelection.size;
-  const selection = bulk && pending.size ? '<div class="request-bulk-actions"><label class="check-label"><input type="checkbox" id="select-all-requests" data-mutate' + (selected === pending.size ? ' checked' : '') + ' aria-label="Επιλογή όλων των εμφανιζόμενων εκκρεμών αιτημάτων">Επιλογή όλων</label><span class="request-selection" role="status">' + selected + ' επιλεγμένα</span>' + button('Έγκριση επιλεγμένων (' + selected + ')','approve-selected-requests',(!selected || state.pendingCommand ? 'disabled' : 'data-mutate'),'primary') + '</div>' : '';
+  const selection = bulk && pending.size ? '<div class="request-bulk-actions"><span class="request-selection" role="status">' + selected + ' επιλεγμένα</span>' + button('Έγκριση επιλεγμένων (' + selected + ')','approve-selected-requests',(!selected || state.pendingCommand ? 'disabled' : 'data-mutate'),'primary') + '</div>' : '';
+  const selectAll = bulk ? '<th scope="col" class="request-checkbox-col">' + (pending.size ? '<label class="check-label"><input type="checkbox" id="select-all-requests" data-mutate' + (selected === pending.size ? ' checked' : '') + ' aria-label="Επιλογή όλων των εμφανιζόμενων εκκρεμών αιτημάτων">Επιλογή όλων</label>' : '<span class="sr-only">Επιλογή</span>') + '</th>' : '';
   return '<div class="requests-content">' + heading('Διορθώσεις', 'Έλεγξε τις δηλωμένες κινήσεις και την ακολουθία στην οποία ανήκουν.') +
     '<section class="card requests-card"><div class="filter-row">' + selectField('Κατάσταση', 'request_status', option('', 'Όλες', state.requestStatus) + Object.entries(STATUS).filter(function(p) { return p[0] !== 'void'; }).map(function(p) { return option(p[0], p[1], state.requestStatus); }).join(''),'data-mutate') +
     selectField('Εργαζόμενος', 'request_employee', employeeOptions(state.requestEmployee, true),'data-mutate') + '</div>' + requestBulkSummaryHtml() + selection +
-    (rows.length ? '<div class="table-wrap"><table><thead><tr>' + (bulk ? '<th scope="col" class="request-checkbox-col"><span class="sr-only">Επιλογή</span></th>' : '') + '<th>Εργαζόμενος</th><th>Ενέργεια</th><th>Δηλωμένη ώρα</th><th>Αίτημα</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' + rows.map(function(ev) {
+    (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Ενέργεια</th><th>Δηλωμένη ώρα</th><th>Αίτημα</th><th>Κατάσταση</th><th></th>' + selectAll + '</tr></thead><tbody>' + rows.map(function(ev) {
       const id = String(ev.id);
-      return '<tr>' + (bulk ? '<td class="request-checkbox-col">' + (pending.has(id) ? '<input type="checkbox" class="request-checkbox" data-request-id="' + esc(id) + '" data-mutate aria-label="' + esc('Επιλογή αιτήματος: ' + (ev.employee_name || personName(ev.employee_id)) + ', ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '"' + (state.requestSelection.has(id) ? ' checked' : '') + '>' : '') + '</td>' : '') + '<td><strong>' + esc(ev.employee_name || personName(ev.employee_id)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td class="mono">' + esc(displayDate(ev.event_at)) + '<br>' + esc(displayTime(ev.event_at, true)) + '</td><td class="wrap">' + esc(ev.reason || '—') + '<small class="shift-line">' + esc(displayDate(ev.created_at)) + ' ' + esc(displayTime(ev.created_at)) + '</small></td><td>' + statusBadge(ev.status) + '</td><td>' +
-        (ev.status === 'pending' && isAdmin() ? button('Έλεγχος', 'review-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'small primary') : button('Ιστορικό', 'person-history', 'data-id="' + esc(ev.employee_id) + '"', 'small')) + '</td></tr>';
+      return '<tr><td><strong>' + esc(ev.employee_name || personName(ev.employee_id)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td class="mono">' + esc(displayDate(ev.event_at)) + '<br>' + esc(displayTime(ev.event_at, true)) + '</td><td class="wrap">' + esc(ev.reason || '—') + '<small class="shift-line">' + esc(displayDate(ev.created_at)) + ' ' + esc(displayTime(ev.created_at)) + '</small></td><td>' + statusBadge(ev.status) + '</td><td>' +
+        (ev.status === 'pending' && isAdmin() ? button('Έλεγχος', 'review-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'small primary') : button('Ιστορικό', 'person-history', 'data-id="' + esc(ev.employee_id) + '"', 'small')) + '</td>' + (bulk ? '<td class="request-checkbox-col">' + (pending.has(id) ? '<input type="checkbox" class="request-checkbox" data-request-id="' + esc(id) + '" data-mutate aria-label="' + esc('Επιλογή αιτήματος: ' + (ev.employee_name || personName(ev.employee_id)) + ', ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '"' + (state.requestSelection.has(id) ? ' checked' : '') + '>' : '') + '</td>' : '') + '</tr>';
     }).join('') + '</tbody></table></div>' : empty('Η λίστα είναι καθαρή', 'Δεν υπάρχουν αιτήματα με τα επιλεγμένα φίλτρα.')) + '</section></div>';
 }
 async function approveSelectedRequests() {
@@ -1102,8 +1113,8 @@ function statsYears() {
 }
 function statsEmployeeList() {
   const search = state.statsSearch.trim().toLocaleLowerCase('el-GR');
-  const people = (state.context?.employees || []).filter(function(e) {
-    return (state.statsShowArchived || !e.archived || String(e.id) === String(state.statsId)) &&
+  const people = visibleEmployees(state.statsShowArchived).filter(function(e) {
+    return (state.statsShowArchived || !e.archived) &&
       (!state.statsDepartment || e.department === state.statsDepartment) &&
       (!search || (e.name + ' ' + (e.department || '')).toLocaleLowerCase('el-GR').includes(search));
   });
@@ -1113,14 +1124,13 @@ function statsEmployeeList() {
   }).join('') : '<p class="attendance-list-empty" role="status">Δεν βρέθηκαν εργαζόμενοι με αυτά τα φίλτρα.</p>';
 }
 function statsPeoplePanel() {
-  const departments = [...new Set((state.context?.employees || []).map(function(e) { return e.department; }).filter(Boolean))].sort();
-  const selectedArchived = employee(state.statsId)?.archived && !state.statsShowArchived;
-  return '<aside class="attendance-people" aria-label="Εργαζόμενοι"><div class="attendance-people-heading"><h2>Εργαζόμενοι</h2><span>' + (state.context?.employees || []).filter(function(e) { return !e.archived; }).length + '</span></div>' +
+  const departments = [...new Set(visibleEmployees(state.statsShowArchived).map(function(e) { return e.department; }).filter(Boolean))].sort();
+  return '<aside class="attendance-people" aria-label="Εργαζόμενοι"><div class="attendance-people-heading"><h2>Εργαζόμενοι</h2><span>' + visibleEmployees(state.statsShowArchived).filter(function(e) { return !e.archived; }).length + '</span></div>' +
     '<div class="field attendance-search"><label class="sr-only" for="attendance-search">Αναζήτηση εργαζομένου</label><input id="attendance-search" type="search" placeholder="Αναζήτηση εργαζομένου…" value="' + esc(state.statsSearch) + '"></div>' +
     (departments.length > 1 ? selectField('Τμήμα', 'stats_department', option('', 'Όλα τα τμήματα', state.statsDepartment) + departments.map(function(d) { return option(d, d, state.statsDepartment); }).join('')) : '') +
     '<label class="check-label attendance-archive-toggle"><input type="checkbox" name="stats_show_archived"' + (state.statsShowArchived ? ' checked' : '') + '>Και αρχειοθετημένοι</label>' +
     '<div id="attendance-employee-list" class="attendance-employee-list" role="group" aria-label="Επιλογή εργαζομένου">' + statsEmployeeList() + '</div>' +
-    (selectedArchived ? '<p class="field-help">Ο επιλεγμένος αρχειοθετημένος εργαζόμενος παραμένει ορατός.</p>' : '') + '</aside>';
+    '</aside>';
 }
 function statsNoteCell(day, canEdit) {
   return (canEdit ? '<button type="button" class="note-chip" data-action="edit-note" data-date="' + esc(day.date) + '">' : '<span class="note-chip">') +
@@ -1271,13 +1281,13 @@ function renderStats() {
     '</section>' + statsDayPanel(selectedDay,previewDays.get(selectedDay?.date) || selectedDay,rawEvents,rawById,canEdit) + '</div><p class="footer-note">Ημερολογιακή κατανομή σε ώρα Ελλάδας · οι νυχτερινές παρουσίες συνδέονται μεταξύ ημερών. Η διαφορά από τον στόχο δεν αποτελεί υπολογισμό νόμιμης υπερωρίας.</p>';
 }
 function renderEmployees() {
-  const rows = (state.context?.employees || []).filter(function(e) { return state.showArchived || !e.archived; });
+  const rows = visibleEmployees(state.showArchived);
   return heading('Προσωπικό', 'Η ομάδα, τα τμήματα και οι ατομικές ρυθμίσεις ωραρίου.', isAdmin() ? button('Τμήματα', 'manage-departments') + button('Προσθήκη εργαζομένου', 'edit-employee', '', 'primary') : '') +
     '<section class="card"><div class="card-heading"><h2>' + rows.length + ' εργαζόμενοι</h2><label class="check-label"><input id="show-archived" type="checkbox"' + (state.showArchived ? ' checked' : '') + '>Εμφάνιση αρχείου</label></div>' +
     (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Προσέλευση</th><th>Αποχώρηση</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
       rows.map(function(e) {
         return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td class="mono">' + esc(e.shift_end ? clockText(e.shift_end) : '—') + '</td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +
-          (isAdmin() ? button('Επεξεργασία', 'edit-employee', 'data-id="' + esc(e.id) + '"', 'small') + button(e.archived ? 'Επαναφορά' : 'Αρχειοθέτηση', 'archive-employee', 'data-id="' + esc(e.id) + '" data-archived="' + !e.archived + '" data-mutate', 'small') : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'small')) + '</div></td></tr>';
+          (isAdmin() ? button('Επεξεργασία', 'edit-employee', 'data-id="' + esc(e.id) + '"', 'small') + button(e.archived ? 'Επαναφορά' : 'Αρχειοθέτηση', 'archive-employee', 'data-id="' + esc(e.id) + '" data-archived="' + !e.archived + '" data-mutate', 'small') + (e.archived ? button('Διαγραφή','delete-employee','data-id="' + esc(e.id) + '"','small danger') : '') : button('Ιστορικό', 'person-history', 'data-id="' + esc(e.id) + '"', 'small')) + '</div></td></tr>';
       }).join('') + '</tbody></table></div>' : empty('Δεν υπάρχει προσωπικό', 'Πρόσθεσε τους εργαζομένους για να ξεκινήσουν οι καταγραφές.')) + '</section>';
 }
 function renderSettings() {
@@ -1383,7 +1393,7 @@ async function saveBrowserDecision() {
   } finally { setBusy(false); }
 }
 function renderAudit() {
-  const labels = { record: 'Καταγραφή', correction: 'Αίτημα διόρθωσης', review: 'Έλεγχος διόρθωσης', event_edit: 'Αλλαγή ώρας', event_void: 'Ακύρωση κινήσεων', history_cleanup: 'Τακτοποίηση παλιού ιστορικού', employee_save: 'Αλλαγή προσωπικού', employee_archive: 'Αρχειοθέτηση / επαναφορά', settings_save: 'Αλλαγή ρυθμίσεων', note_save: 'Σημείωση ημέρας', note_delete: 'Αφαίρεση σημείωσης', department_add: 'Προσθήκη τμήματος', department_delete: 'Αφαίρεση τμήματος', member_save: 'Αλλαγή πρόσβασης' };
+  const labels = { record: 'Καταγραφή', correction: 'Αίτημα διόρθωσης', review: 'Έλεγχος διόρθωσης', event_edit: 'Αλλαγή ώρας', event_void: 'Ακύρωση κινήσεων', history_cleanup: 'Τακτοποίηση παλιού ιστορικού', employee_save: 'Αλλαγή προσωπικού', employee_archive: 'Αρχειοθέτηση / επαναφορά', employee_delete: 'Διαγραφή από την εφαρμογή', settings_save: 'Αλλαγή ρυθμίσεων', note_save: 'Σημείωση ημέρας', note_delete: 'Αφαίρεση σημείωσης', department_add: 'Προσθήκη τμήματος', department_delete: 'Αφαίρεση τμήματος', member_save: 'Αλλαγή πρόσβασης' };
   return heading('Ιστορικό αλλαγών', 'Οι καταγραφές διαχείρισης διατηρούνται για να είναι οι αλλαγές ελέγξιμες.') +
     '<section class="card">' + (state.audit.length ? '<div class="table-wrap"><table><thead><tr><th>Χρόνος</th><th>Λογαριασμός</th><th>Ενέργεια</th><th>Πληροφορίες</th></tr></thead><tbody>' +
       state.audit.map(function(row) {
@@ -1669,7 +1679,7 @@ function openDepartments() {
   openModal('Διαχείριση τμημάτων','Προσθήκη και αφαίρεση τμημάτων προσωπικού.',body,submitButton('Προσθήκη τμήματος'),'departments');
 }
 function openEmployee(id) {
-  if (!isAdmin()) return;
+  if (!isAdmin() || (id && !employee(id))) return;
   const e = employee(id) || {};
   state.modalEmployeeId = e.id || null;
   const departments = departmentNames();
@@ -1686,11 +1696,12 @@ function openEmployee(id) {
 }
 function openVoid(ids) {
   if (!isAdmin() || isArchiveView() || !ids.length) return;
-  if (ids.length > 100) { toast('Επίλεξε έως 100 κινήσεις για μία ακύρωση.', 'error'); return; }
+  ids = [...new Set(ids.map(String))];
+  if (ids.length > 100) { toast('Μπορείς να διαγράψεις έως 100 κινήσεις μαζί. Μείωσε τις επιλεγμένες κινήσεις και δοκίμασε ξανά.', 'error'); return; }
   state.modalVoidIds = ids;
-  openModal('Ακύρωση καταγραφών', ids.length + ' επιλεγμένες κινήσεις',
-    banner('Οι κινήσεις θα ακυρωθούν και θα παραμείνουν ορατές στο ιστορικό. Η ακύρωση δεν μπορεί να αφήσει άλλες κινήσεις χωρίς τις προϋποθέσεις τους.', 'warning') +
-    '<div class="field"><label for="f-reason">Αιτιολογία ακύρωσης</label><textarea id="f-reason" name="reason" maxlength="1000" required></textarea></div>', '<button class="button danger" type="submit" data-submit>Ακύρωση κινήσεων</button>', 'void');
+  openModal(ids.length === 1 ? 'Διαγραφή καταγραφής' : 'Διαγραφή καταγραφών', ids.length + (ids.length === 1 ? ' επιλεγμένη κίνηση' : ' επιλεγμένες κινήσεις'),
+    banner('Η διαγραφή αφαιρεί τις κινήσεις από τους υπολογισμούς. Οι εγγραφές διατηρούνται ως ακυρωμένες στο ιστορικό για έλεγχο. Δεν επιτρέπεται να μείνουν άλλες κινήσεις χωρίς τις προϋποθέσεις τους.', 'warning') +
+    '<div class="field"><label for="f-reason">Αιτιολογία διαγραφής</label><textarea id="f-reason" name="reason" minlength="3" maxlength="1000" required></textarea></div>', '<button class="button danger" type="submit" data-submit>Διαγραφή κινήσεων</button>', 'void');
 }
 function openNote(day) {
   if (!isAdmin() || isArchiveView() || isArchiveView('stats') || !state.statsId) return;
@@ -1730,11 +1741,13 @@ function openDevice(id) {
     submitButton(member ? 'Αποθήκευση υπολογιστή' : 'Δημιουργία υπολογιστή'), 'device-account');
 }
 function updateBulkSelection() {
-  if (isArchiveView()) return;
+  if (!isAdmin() || isArchiveView()) return;
   const checked = document.querySelectorAll('.event-check:checked').length;
   const box = document.getElementById('bulk-bar'); if (!box) return;
-  box.classList.toggle('hidden', checked === 0);
-  document.getElementById('bulk-label').textContent = checked + ' επιλεγμένες κινήσεις';
+  box.classList.remove('hidden');
+  document.getElementById('bulk-label').textContent = checked + ' επιλεγμένες κινήσεις' + (checked > 100 ? ' · Έως 100 ανά διαγραφή' : '');
+  const remove = document.getElementById('delete-selected-events');
+  if (remove) remove.disabled = checked === 0 || state.busy || Boolean(state.pendingCommand);
   const all = document.getElementById('select-all-events');
   if (all) { const total = document.querySelectorAll('.event-check').length; all.checked = total > 0 && checked === total; all.indeterminate = checked > 0 && checked < total; }
 }
@@ -1822,7 +1835,7 @@ async function handleAction(action, node) {
     if (!['admin', 'reviewer'].includes(state.context.role)) return;
     const id = String(node.dataset.id || '');
     const person = (state.context.employees || []).find(function(e) { return String(e.id) === id; });
-    if (!person || (person.archived && !state.statsShowArchived && String(state.statsId) !== id) || String(state.statsId) === id) return;
+    if (!person || person.deleted_at || (person.archived && !state.statsShowArchived) || String(state.statsId) === id) return;
     state.statsId = person.id; state.statsSelectedDay = ''; state.statsSelectionScope = '';
     await loadView('stats'); return;
   }
@@ -1900,6 +1913,15 @@ async function handleAction(action, node) {
   if (action === 'edit-event') { await openEventEdit(node.dataset.id, node.dataset.employee); return; }
   if (action === 'review-event') { openReview(node.dataset.id); return; }
   if (action === 'edit-employee') { openEmployee(node.dataset.id); return; }
+  if (action === 'delete-employee') {
+    const person = employee(node.dataset.id);
+    if (!isAdmin() || !person?.archived) return;
+    state.modalEmployeeId = person.id;
+    openModal('Διαγραφή αρχειοθετημένου εργαζομένου',person.name,
+      '<p>Ο εργαζόμενος θα αφαιρεθεί από τις λίστες της εφαρμογής. Το αποθηκευμένο ιστορικό του θα διατηρηθεί.</p><p class="strong">Θέλεις να συνεχίσεις;</p>',
+      submitButton('Διαγραφή από την εφαρμογή').replace('button primary','button danger'),'employee-delete');
+    return;
+  }
   if (action === 'archive-employee') {
     const id = node.dataset.id; const archived = node.dataset.archived === 'true';
     openModal(archived ? 'Αρχειοθέτηση εργαζομένου' : 'Επαναφορά εργαζομένου', personName(id),
@@ -1907,6 +1929,7 @@ async function handleAction(action, node) {
       submitButton(archived ? 'Αρχειοθέτηση' : 'Επαναφορά'), 'archive');
     state.modalEmployeeId = id; state.modalArchived = archived; return;
   }
+  if (action === 'delete-history-event') { openVoid([node.dataset.id]); return; }
   if (action === 'void-selected') { openVoid(Array.from(document.querySelectorAll('.event-check:checked')).map(function(el) { return el.value; })); return; }
   if (action === 'edit-note') { openNote(node.dataset.date); return; }
   if (action === 'edit-member') { openMember(node.dataset.email); return; }
@@ -2071,13 +2094,19 @@ async function handleModalForm(form, decision) {
       if (state.modalEmployeeId) payload.id = state.modalEmployeeId;
       await command('employee_save', payload); closeModal(); toast('Ο εργαζόμενος αποθηκεύτηκε.', 'success'); await refreshApp(); return;
     }
+    if (kind === 'employee-delete') {
+      const person = employee(state.modalEmployeeId);
+      if (!isAdmin() || !person?.archived) throw new Error('Διαγραφή επιτρέπεται μόνο για αρχειοθετημένο εργαζόμενο.');
+      await command('employee_delete',{id:person.id});
+      closeModal(); toast('Ο εργαζόμενος αφαιρέθηκε από την εφαρμογή. Το ιστορικό του διατηρήθηκε.','success'); await refreshApp(); return;
+    }
     if (kind === 'archive') {
       await command('employee_archive', { id: state.modalEmployeeId, archived: state.modalArchived });
       if (state.modalArchived && state.selectedId === state.modalEmployeeId) { state.selectedId = ''; state.employeeData = null; }
       closeModal(); toast(state.modalArchived ? 'Ο εργαζόμενος αρχειοθετήθηκε.' : 'Ο εργαζόμενος επανήλθε.', 'success'); await refreshApp(); return;
     }
     if (kind === 'void') {
-      await command('event_void', { ids: state.modalVoidIds, reason: f.reason.value.trim() }); closeModal(); toast('Οι κινήσεις ακυρώθηκαν και διατηρούνται στο ιστορικό.', 'success'); await refreshApp(); return;
+      await command('event_void', { ids: state.modalVoidIds, reason: f.reason.value.trim() }); closeModal(); toast('Οι κινήσεις αφαιρέθηκαν από τους υπολογισμούς και διατηρούνται ως ακυρωμένες στο ιστορικό.', 'success'); await refreshApp(); return;
     }
     if (kind === 'note') {
       if (decision === 'delete') await command('note_delete', { employee_id: state.statsId, date: state.modalNoteDate });
@@ -2150,7 +2179,7 @@ async function handleChange(target) {
   if (target.name === 'request_status') { state.requestSelection.clear(); state.requestBulkResult = null; state.requestStatus = target.value; await loadView('requests'); return; }
   if (target.name === 'request_employee') { state.requestSelection.clear(); state.requestBulkResult = null; state.requestEmployee = target.value; await loadView('requests'); return; }
   if (target.name === 'stats_department') { state.statsDepartment = target.value; renderCurrentView(); return; }
-  if (target.name === 'stats_show_archived') { state.statsShowArchived = Boolean(target.checked); renderCurrentView(); return; }
+  if (target.name === 'stats_show_archived') { state.statsShowArchived = Boolean(target.checked); if (!state.statsShowArchived && employee(state.statsId)?.archived) { state.statsId = activeEmployees()[0]?.id || ''; state.monthData = null; state.stats = null; state.statsSelectedDay = ''; state.statsSelectionScope = ''; await loadView('stats'); } else renderCurrentView(); return; }
   if (target.name === 'stats_month_number' || target.name === 'stats_year') {
     const current = /^\d{4}-(0[1-9]|1[0-2])$/.test(state.month) ? state.month : today().slice(0, 7);
     const year = target.name === 'stats_year' ? String(target.value) : current.slice(0, 4);

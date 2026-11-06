@@ -731,25 +731,27 @@ body,body * { font-weight:700 !important; }
 .requests-card .request-checkbox-col { width:64px; text-align:center; }
 @media(max-width:720px) { .request-bulk-actions { padding:14px; gap:12px; } .request-bulk-actions .button { width:100%; } }
 
-/* Larger text is limited to the Corrections content, outside shared navigation. */
-.requests-content { font-size:28px; }
-.requests-content h1 { font-size:56px; }
-.requests-content .eyebrow { font-size:22px; }
-.requests-content .page-heading p { font-size:28px; }
-.requests-content .field label { font-size:24px; }
-.requests-content .field select { font-size:28px; }
-.requests-content .table-wrap table { font-size:28px; }
-.requests-content .table-wrap th { font-size:20px; }
-.requests-content .button { font-size:26px; }
-.requests-content .button.small { font-size:24px; }
-.requests-content .badge { font-size:22px; }
-.requests-content small { font-size:22px; }
-.requests-content .check-label { font-size:26px; }
-.requests-content .request-selection { font-size:24px; }
-.requests-content .banner { font-size:26px; }
-.requests-content .banner-icon { font-size:36px; }
-.requests-content .empty h3 { font-size:32px; }
-@media(max-width:720px) {
- .requests-content h1 { font-size:50px; }
- .requests-content .page-heading p,.requests-content .banner { font-size:24px; }
-}
+/* Corrections: regular heading/filters and an intermediate table text size. */
+.requests-content .table-wrap table { font-size:21px; }
+.requests-content .table-wrap th { font-size:15px; }
+.requests-content .table-wrap .button { font-size:18px; }
+.requests-content .table-wrap .badge { font-size:16.5px; }
+.requests-content .table-wrap small { font-size:16.5px; }
+.requests-content .request-selection { font-size:18px; }
+.requests-content .request-bulk-actions .button { font-size:18px; }
+.requests-content .request-bulk-actions { justify-content:flex-end; }
+.requests-card .request-checkbox-col { width:160px; min-width:150px; text-align:center; }
+.requests-card .request-checkbox-col .check-label { justify-content:center; white-space:nowrap; margin:0; font-size:13px; }
+
+/* Employee badges sit below the name rather than squeezing it. */
+.overview-page .person-row { flex-direction:column; align-items:stretch; gap:0; }
+.overview-page .person-row > .overview-person-main { display:flex; align-items:center; gap:7px; flex:0 0 auto; width:100%; min-width:0; }
+.overview-page .overview-person-main > .overview-person-text { flex:1; min-width:0; }
+.overview-page .person-row > .overview-person-footer { display:flex; flex-wrap:wrap; justify-content:center; gap:4px; flex:0 0 auto; width:100%; margin-top:5px; }
+.overview-page .metric-value { text-align:center; }
+.overview-page .overview-group h3 > .badge { justify-content:center; }
+.history-delete-bar { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:14px; padding:14px 20px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:#f7f9fc; }
+.history-selection-col { min-width:150px; width:160px; text-align:center; }
+.history-selection-col .check-label { justify-content:center; white-space:nowrap; }
+.event-check,#select-all-events { width:24px; height:24px; margin:0; accent-color:var(--teal); cursor:pointer; }
+.event-check:focus-visible,#select-all-events:focus-visible { outline:2px solid #5243ed; outline-offset:3px; }

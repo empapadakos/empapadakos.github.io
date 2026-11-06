@@ -774,3 +774,28 @@ body,body * { font-weight:700 !important; }
 .employees-card .employee-table-name { gap:8px; }
 .employees-card .actions { gap:6px; flex-wrap:nowrap; }
 .employees-card .break-line { margin-top:1px; }
+
+/* Readability changes belong only to their requested table views. */
+.requests-content .table-wrap th,
+.requests-content .table-wrap td,
+.requests-content .table-wrap td *,
+.requests-content .table-wrap .check-label { font-weight:700; }
+.history-content,
+.history-content * { font-weight:700; }
+.history-content .table-wrap tbody { font-size:17px; }
+.history-content .table-wrap th { font-size:12px; }
+.history-content .table-wrap small,
+.history-content .table-wrap .badge,
+.history-content .table-wrap .button { font-size:14px; }
+
+/* Extra employee notes start below the regular live-status cards. */
+.overview-page .overview-notes-start { grid-column-start:1; }
+.overview-page .metric.metric-in { background:#e8f7ee; }
+.overview-page .metric.metric-break { background:#fff0df; }
+.overview-page .metric.metric-out { background:#fdecef; }
+.overview-page .metric.metric-corrections { background:#fff8d9; }
+.overview-page .metric-label { color:#4b5d74; }
+
+/* Center each compact frame within its own content area. */
+.employees-card { margin-inline:auto; }
+.attendance-report .attendance-summary { margin-inline:auto; }

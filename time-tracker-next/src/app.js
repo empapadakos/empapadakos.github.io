@@ -12,11 +12,11 @@ const NOTES = { note: 'Σημείωση', absence: 'Απουσία', leave: 'Ά�
 const VIEWS = [
   ['record', 'Καταγραφή', '↗', ['admin', 'operator']],
   ['overview', 'Ζωντανή εικόνα', '◉', ['admin', 'reviewer']],
-  ['history', 'Καταγραφές', '≡', ['admin', 'reviewer']],
   ['requests', 'Διορθώσεις', '↺', ['admin', 'reviewer']],
   ['stats', 'Παρουσιολόγιο', '▦', ['admin', 'reviewer']],
   ['employees', 'Προσωπικό', '♧', ['admin', 'reviewer']],
   ['settings', 'Ρυθμίσεις', '⚙', ['admin']],
+  ['history', 'Καταγραφές', '≡', ['admin', 'reviewer']],
   ['audit', 'Ιστορικό αλλαγών', '⌁', ['admin', 'reviewer']]
 ];
 const app = document.getElementById('app');
@@ -609,7 +609,7 @@ async function enterApp({freshAdmin = false} = {}) {
   state.browserGate = null; state.browserPollAt = 0;
   state.context = context; setServerTime(context.server_now); updateRequestCounter(context.pending_count);
   if (legacyAdministrativeContext(context)) state.lastActivity = Date.now();
-  restorePending(); state.view = pageMode.admin ? 'overview' : (VIEWS.find(function(v) { return v[3].includes(context.role); })?.[0] || 'overview');
+  restorePending(); state.view = ['admin','reviewer'].includes(context.role) ? 'overview' : 'record';
   if (state.pendingBrowserRequest && isOwner()) state.view = 'settings';
   state.month ||= today().slice(0, 7); state.historyFrom ||= today().slice(0, 7) + '-01'; state.historyTo ||= today();
   reconcileSelections();
@@ -826,24 +826,30 @@ function renderOverview() {
   const groups = [['IN', 'Μέσα', 'green'], ['ON_BREAK', 'Σε διάλειμμα', 'amber'], ['OUT', 'Εκτός', '']];
   const counts = groups.map(function(g) { return rows.filter(function(e) { return stateOf(e).state === g[0]; }).length; });
   return '<div class="overview-content">' + heading('Ζωντανή εικόνα', 'Η κατάσταση της ομάδας με εγκεκριμένες και εκκρεμείς διορθώσεις.') +
-    '<div class="metric-grid">' + metric('Μέσα στην εργασία', counts[0], 'Ενεργές βάρδιες') + metric('Σε διάλειμμα', counts[1], 'Ανοιχτά διαλείμματα') + metric('Εκτός', counts[2], 'Χωρίς ανοιχτή βάρδια') + metric('Εκκρεμείς διορθώσεις', state.overview?.pending_count || 0, 'Προς έλεγχο', 'open-requests') + '</div>' +
+    '<div class="metric-grid">' + metric('Μέσα στην εργασία', counts[0], 'Ενεργές βάρδιες', null, 'metric-in') + metric('Σε διάλειμμα', counts[1], 'Ανοιχτά διαλείμματα', null, 'metric-break') + metric('Εκτός', counts[2], 'Χωρίς ανοιχτή βάρδια', null, 'metric-out') + metric('Εκκρεμείς διορθώσεις', state.overview?.pending_count || 0, 'Προς έλεγχο', 'open-requests', 'metric-corrections') + '</div>' +
     (rows.some(function(e) { return stateOf(e).valid === false; }) ? banner('Υπάρχουν ακολουθίες που χρειάζονται έλεγχο. Άνοιξε τον εργαζόμενο για τις ελλείψεις.', 'warning') : '') +
     '<div class="overview-columns">' + groups.map(function(g) {
-      const list = rows.filter(function(e) { return stateOf(e).state === g[0]; });
-      return '<section class="overview-group"><h3>' + esc(g[1]) + '<span class="badge ' + g[2] + '">' + list.length + '</span></h3>' + (list.length ? '<div class="overview-people">' + list.map(function(e) {
+      const cards = rows.filter(function(e) { return stateOf(e).state === g[0]; }).map(function(e) {
         const status = stateOf(e), info = liveBreakInfo(e,rows), together = Boolean(info?.colleagues.length);
+        return {e,status,info,together,noted:Boolean(status.valid === false || status.pending_count || together || info?.excess)};
+      });
+      const regular = cards.filter(function(card) { return !card.noted; });
+      const list = regular.concat(cards.filter(function(card) { return card.noted; }));
+      return '<section class="overview-group"><h3>' + esc(g[1]) + '<span class="badge ' + g[2] + '">' + list.length + '</span></h3>' + (list.length ? '<div class="overview-people">' + list.map(function(card,index) {
+        const {e,status,info,together} = card;
         const shared = together ? 'Ταυτόχρονο διάλειμμα με: ' + info.colleagues.map(function(peer) { return peer.name; }).join(', ') : '';
         const startLabel = info ? (dateKey(info.startAt) === today() ? '' : displayDate(info.startAt).slice(0,5)+' ') + displayTime(info.startAt) : '';
-        return '<button type="button" class="person-row' + (together ? ' break-together' : '') + '"' + (shared ? ' title="' + esc(shared) + '"' : '') + ' data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + '<div class="overview-person-main">' + avatar(e) +
+        return '<button type="button" class="person-row' + (together ? ' break-together' : '') + (card.noted && index === regular.length ? ' overview-notes-start' : '') + '"' + (shared ? ' title="' + esc(shared) + '"' : '') + ' data-action="' + (canRecord() ? 'select-person-from-overview' : 'person-history') + '" data-id="' + esc(e.id) + '">' + '<div class="overview-person-main">' + avatar(e) +
           '<div class="overview-person-text"><span class="strong overview-person-name">' + esc(e.name) + '</span><small>' + esc(e.department || 'Ομάδα') + (together ? ' · <span class="attendance-negative">Μαζί</span><span class="sr-only">' + esc(shared) + '</span>' : '') + '</small>' +
           (info ? '<small class="overview-break-start">από <time datetime="' + esc(info.startAt) + '">' + esc(startLabel) + '</time> · <span data-elapsed="' + esc(info.startAt) + '">' + esc(formatMinutes(info.elapsed)) + '</span> <span class="overview-break-excess attendance-negative' + (!info.excess ? ' hidden' : '') + '" data-live-break data-break-start="' + esc(info.startAt) + '" data-break-closed="' + esc(info.closed) + '" data-break-day="' + esc(info.date) + '" data-break-limit="' + esc(info.limit) + '">' + (info.excess ? 'Υπέρβαση +' + info.excess + 'λ' : '') + '</span></small>' : '') + '</div>' +
           '</div>' + ((status.valid === false || status.pending_count) ? '<div class="overview-person-footer">' + (status.valid === false ? '<span class="badge red">Έλεγχος</span>' : '') + pendingBadge(status.pending_count) + '</div>' : '') + '</button>';
       }).join('') + '</div>' : '<p class="muted">Κανένας εργαζόμενος.</p>') + '</section>';
     }).join('') + '</div><p class="footer-note">Ανανέωση ανά 30 δευτερόλεπτα · Ώρα Ελλάδας</p></div>';
 }
-function metric(label, value, foot, action = null) {
+function metric(label, value, foot, action = null, variant = '') {
   const clickable = action && ['admin','reviewer'].includes(state.context?.role);
-  return (clickable ? '<button type="button" class="metric metric-link" data-action="' + esc(action) + '">' : '<div class="metric">') + '<span class="metric-label">' + esc(label) + '</span><span class="metric-value mono">' + esc(value) + '</span><span class="metric-foot">' + esc(foot) + '</span>' + (clickable ? '</button>' : '</div>');
+  const classes = 'metric' + (clickable ? ' metric-link' : '') + (variant ? ' ' + esc(variant) : '');
+  return (clickable ? '<button type="button" class="' + classes + '" data-action="' + esc(action) + '">' : '<div class="' + classes + '">') + '<span class="metric-label">' + esc(label) + '</span><span class="metric-value mono">' + esc(value) + '</span><span class="metric-foot">' + esc(foot) + '</span>' + (clickable ? '</button>' : '</div>');
 }
 function filteredHistory() {
   return (state.historyData?.events || []).filter(function(ev) {
@@ -852,7 +858,7 @@ function filteredHistory() {
   }).slice().reverse();
 }
 function renderHistory() {
-  if (!state.historyId) return heading('Καταγραφές', 'Το ιστορικό κινήσεων κάθε εργαζομένου.') + '<div class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</div>';
+  if (!state.historyId) return '<div class="history-content">' + heading('Καταγραφές', 'Το ιστορικό κινήσεων κάθε εργαζομένου.') + '<div class="card">' + empty('Δεν υπάρχουν εργαζόμενοι', 'Πρόσθεσε πρώτα το προσωπικό.') + '</div></div>';
   const readOnly = isArchiveView('history');
   const canEdit = isAdmin() && !readOnly, canDelete = isOwner() && !readOnly;
   const rows = filteredHistory();
@@ -860,7 +866,7 @@ function renderHistory() {
     field('Από', 'history_from', state.historyFrom, 'date') + field('Έως', 'history_to', state.historyTo, 'date') +
     selectField('Κατάσταση', 'history_status', option('', 'Όλες', state.historyStatus) + Object.entries(STATUS).map(function(p) { return option(p[0], p[1], state.historyStatus); }).join('')) +
     selectField('Ενέργεια', 'history_type', option('', 'Όλες', state.historyType) + Object.entries(ACTIONS).map(function(p) { return option(p[0], p[1], state.historyType); }).join('')) + '</div>';
-  return heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() && !readOnly ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
+  return '<div class="history-content">' + heading('Καταγραφές', 'Πλήρες ιστορικό, με διακριτές τις εκκρεμείς και τις ακυρωμένες κινήσεις.', canRecord() && !readOnly ? button('Νέα διόρθωση', 'open-correction', 'data-id="' + esc(state.historyId) + '"', 'primary') : '') +
     '<section class="card">' + filters + (readOnly ? archiveNotice() : '') + (canDelete ? '<div id="bulk-bar" class="bulk-bar history-delete-bar"><span id="bulk-label">0 επιλεγμένες κινήσεις</span>' + button('Διαγραφή επιλεγμένων', 'void-selected', 'id="delete-selected-events" disabled', 'danger small') + '</div>' : '') +
     (state.historyData?.history_limited ? '<p class="field-help">Στο τερματικό εμφανίζονται έως 200 πρόσφατες κινήσεις. Το πλήρες ιστορικό είναι διαθέσιμο στη διαχείριση.</p>' : '') +
     (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Ημερομηνία & ώρα</th><th>Ενέργεια</th><th>Κατάσταση</th><th>Σημείωση</th>' + (canEdit ? '<th>Ενέργειες</th>' : '') + (canDelete ? '<th class="history-selection-col"><label class="check-label"><input type="checkbox" id="select-all-events" data-mutate aria-label="Επιλογή όλων των εμφανιζόμενων κινήσεων που μπορούν να διαγραφούν">Επιλογή όλων</label></th>' : '') + '</tr></thead><tbody>' + rows.map(function(ev) {
@@ -868,7 +874,7 @@ function renderHistory() {
       const deletable = canDelete && ['approved', 'pending', 'draft'].includes(ev.status);
       return '<tr><td class="mono">' + esc(displayDate(ev.event_at)) + '<br><strong>' + esc(displayTime(ev.event_at, true)) + '</strong></td><td>' + esc(ACTIONS[ev.type] || ev.type) + '</td><td>' + eventStatusBadge(ev) + '</td><td class="wrap">' + esc(ev.reason || '—') + (ev.source === 'history_cleanup' ? '<small class="shift-line">Εκτιμώμενη παλιά ώρα</small>' : (ev.source === 'admin' || ev.source === 'admin_edit' ? '<small class="shift-line">Ώρα διαχειριστή</small>' : '')) + '</td>' +
         (canEdit ? '<td><div class="actions">' + (editable ? button('Αλλαγή ώρας', 'edit-event', 'data-id="' + esc(ev.id) + '"', 'small') : '') + (deletable ? button('Διαγραφή', 'delete-history-event', 'data-id="' + esc(ev.id) + '" data-mutate', 'danger small') : '') + '</div></td>' : '') + (canDelete ? '<td class="history-selection-col">' + (deletable ? '<input type="checkbox" class="event-check" value="' + esc(ev.id) + '" data-mutate aria-label="' + esc('Επιλογή κίνησης: ' + (ACTIONS[ev.type] || ev.type) + ', ' + displayDate(ev.event_at) + ' ' + displayTime(ev.event_at)) + '">' : '') + '</td>' : '') + '</tr>';
-    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρωμένες κινήσεις εμφανίζονται με κατάσταση «Ακυρωμένη» και δεν υπολογίζονται στις ώρες.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section>';
+    }).join('') + '</tbody></table></div><div class="table-footer"><span>' + rows.length + ' καταγραφές</span><span>Οι ακυρωμένες κινήσεις εμφανίζονται με κατάσταση «Ακυρωμένη» και δεν υπολογίζονται στις ώρες.</span></div>' : empty('Δεν υπάρχουν κινήσεις', 'Άλλαξε τα φίλτρα ή επίλεξε διαφορετικό εργαζόμενο.')) + '</section></div>';
 }
 function visibleRequestRows() { return (state.requests?.events || []).filter(function(ev) { return !(state.context?.employees || []).some(function(e) { return String(e.id) === String(ev.employee_id) && (e.archived || e.deleted_at); }); }); }
 function pendingRequestRows() {
@@ -1254,7 +1260,7 @@ function statsDayPanel(day, preview, rawEvents, rawById, canEdit) {
     '<div class="attendance-day-recap' + (day.has_open_shift ? ' in-progress' : '') + '"><span aria-hidden="true">◷</span><strong>' + esc(formatMinutes(day.gross_minutes)) + ' παρουσίας · ' + esc(statsMinuteText(day.break_minutes)) + ' διαλείμματα</strong></div>' +
     '<div class="attendance-detail-status">' + statsDayStatus(day, preview, rawEvents) + '</div>' +
     (day.issues.length ? '<p class="attendance-issue" role="status">' + day.issues.map(function(issue) { return esc(issue.message || 'Χρειάζεται έλεγχος ακολουθίας.'); }).join('<br>') + '</p>' : '') +
-    (periods || '<div class="attendance-day-empty"><span aria-hidden="true">◷</span><p>Δεν υπάρχουν παρουσίες.</p>' + (canEdit ? timeCell(null,null,state.statsId,{date:day.date,type:'clock_in'}) : '') + '</div>') +
+    (periods || '<div class="attendance-day-empty"><span aria-hidden="true">◷</span><p>Δεν υπάρχουν παρουσίες.</p></div>') +
     (extra.length ? '<section class="attendance-detail-extra"><h3>Πρόσθετες κινήσεις</h3><ol class="attendance-timeline">' + [...extra].sort(function(a,b) { return Date.parse(a.event_at)-Date.parse(b.event_at); }).map(function(e) { return statsTimelineEntry(e.type,e.event_at,e.id,day,{shift_ref:e.shift_ref,break_ref:e.break_ref},rawById,e.status === 'draft' ? '<span class="draft-line">Πρόχειρη: ' + esc(ACTIONS[e.type]) + ' · εκτός συνόλων</span>' : (e.status === 'pending' && state.statsMode === 'approved' ? 'Εκκρεμής · εκτός εγκεκριμένων συνόλων' : 'Χρειάζεται έλεγχο')); }).join('') + '</ol></section>' : '') +
     (canEdit ? '<div class="attendance-detail-actions">' + button('+ Προσθήκη κίνησης','admin-day',attrs,'attendance-add-movement') + '</div>' : '') +
     '<section class="attendance-day-note"><h3>Σημείωση ημέρας</h3>' + sharedBreakNoteHtml(day) + statsNoteCell(day, canEdit) + '</section></aside>';

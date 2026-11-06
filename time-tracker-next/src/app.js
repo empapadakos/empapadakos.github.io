@@ -1,5 +1,6 @@
 import { api } from './api.js';
 import { pageMode } from './page-mode.js';
+import { buildFlowDiagnostics } from './flow-diagnostics.js';
 import { replay, effectiveEvents, planNext, monthlyStats, dateKey, formatTime, formatDate, formatMinutes, localToIso, possibleInstants } from './domain.js';
 
 const APP_NAME = 'Time Tracker v2';
@@ -373,10 +374,22 @@ function issueMessages(error) {
     return i.message || (i.expected_actions?.length ? 'Χρειάζεται πρώτα: ' + i.expected_actions.map(function(a) { return ACTIONS[a] || a; }).join(' → ') : '');
   })).filter(Boolean).filter(function(v, i, all) { return all.indexOf(v) === i; }).join('\n');
 }
+function describeFlowFailure(error, attemptedEvents = [], details = error?.details) {
+  if (error?.uncertain || !details || !(details.issues?.length || details.state?.issues?.length)) return error;
+  error.flowDiagnostics = buildFlowDiagnostics(details, { attemptedEvents });
+  return error;
+}
+function flowDiagnosticText(model) {
+  return [model.title, model.intro, model.attemptSummary, ...model.items.map(function(item, index) {
+    return [(index + 1) + '. ' + item.title, item.explanation,
+      ...item.evidence.map(function(evidence) { return evidence.label + ': ' + evidence.text; }),
+      item.timeWindow?.text, item.attemptExplanation, 'Τι χρειάζεται: ' + item.solution].filter(Boolean).join('\n');
+  }), model.remainingCount ? 'Υπάρχουν ακόμη ' + model.remainingCount + ' ασυμφωνίες που χρειάζονται έλεγχο στις Καταγραφές.' : '', model.footer].filter(Boolean).join('\n\n');
+}
 function modalError(error, kind = '') {
   const node = document.getElementById('modal-error');
   if (!node) { toast(issueMessages(error), 'error'); return; }
-  node.textContent = issueMessages(error);
+  node.textContent = error.flowDiagnostics ? flowDiagnosticText(error.flowDiagnostics) : issueMessages(error);
   if (isAdmin() && error.details?.code === 'STALE_REVISION' && state.adminDay) {
     const p = document.createElement('p'); p.textContent = 'Οι ώρες άλλαξαν σε άλλη συσκευή. Φόρτωσε τη νεότερη εικόνα πριν αποθηκεύσεις ξανά. Οι μη αποθηκευμένες αλλαγές αυτής της φόρμας θα χαθούν.';
     const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'admin-day-reload'; b.textContent = 'Φόρτωση νεότερων ωρών'; node.append(p, b);
@@ -1504,7 +1517,21 @@ async function recordAction(type, {afterCorrection = false} = {}) {
       if (String(data.employee?.id) !== String(id)) { modalError(new Error('Δεν φορτώθηκε ο εργαζόμενος. Δοκίμασε ξανά.')); return; }
       state.employeeData = data; setServerTime(data.server_now);
       const suggestion = correctionSuggestionForState(stateOf(data), type);
-      if (suggestion.actions.length || suggestion.issue) { openCorrection(id, suggestion); return; }
+      if (suggestion.actions.length || suggestion.issue) {
+        openCorrection(id, suggestion);
+        const persisted = stateOf(data);
+        const attempt = {type, event_at: new Date(now()).toISOString()};
+        const issues = persisted.issues?.length ? persisted.issues : [{
+          type, event_at: attempt.event_at, state_before: persisted.state,
+          expected_actions: suggestion.actions, open_shift_at: persisted.open_shift_at,
+          open_break_at: persisted.open_break_at,
+          repair_after_at: persisted.open_break_at || persisted.open_shift_at || null,
+          repair_before_at: attempt.event_at
+        }];
+        const details = {state: {...persisted, issues}};
+        modalError(describeFlowFailure(error, [attempt], details), 'correction');
+        return;
+      }
       modalError(new Error('Η κατάσταση άλλαξε. Επίλεξε ξανά την ενέργεια που θέλεις.')); return;
     }
     if (afterCorrection) {
@@ -2078,13 +2105,15 @@ async function handleModalForm(form, decision) {
         if (!error.uncertain && ['DUPLICATE_EVENT', 'CORRECTION_CONTEXT_CHANGED'].includes(code)) {
           await refreshDuplicateCorrection(id, guidance, token, session, code); return;
         }
-        if (code === 'CORRECTION_NOT_PROGRESSING' && error.details?.state) {
-          const current = stateOf(error.details.state);
+        const savedState = code === 'CORRECTION_SEQUENCE' ? error.details?.before_state : error.details?.state;
+        if (!error.uncertain && ['CORRECTION_NOT_PROGRESSING', 'CORRECTION_SEQUENCE'].includes(code) && savedState) {
+          const current = stateOf(savedState);
           cacheCorrectionState(id, current);
           const fresh = correctionSuggestionForState(current, guidance?.requestedAction || null);
           state.correctionGuidance = {...fresh, guided: guidance?.guided === true};
           error.message = 'Η διόρθωση δεν αποθηκεύτηκε, γιατί η ώρα δεν ταιριάζει με τη σειρά των υπαρχουσών εγγραφών. Έλεγξε την ώρα ή ζήτησε έλεγχο του ιστορικού.';
         }
+        describeFlowFailure(error, entries);
         throw error;
       }
       return;

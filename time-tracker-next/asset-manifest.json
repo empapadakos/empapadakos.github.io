@@ -5,5 +5,6 @@
   "src/page-mode.js": "src/page-mode.ad935b8b334d2a75.js",
   "src/api.js": "src/api.2696be628143baf4.js",
   "src/domain.js": "src/domain.de9544dff7a66aa0.js",
-  "src/app.js": "src/app.41c256b34c6d483d.js"
+  "src/flow-diagnostics.js": "src/flow-diagnostics.973c0b6f0140c1c5.js",
+  "src/app.js": "src/app.0f20a627125500f4.js"
 }

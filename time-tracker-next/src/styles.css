@@ -315,27 +315,27 @@ body.employee-kiosk {
 
 /* Attendance workspace: the approved white three-pane layout. */
 .attendance-page { --ink:#131443; --muted:#5e637b; --line:#e4e6ef; --teal:#008f82; --teal-soft:#e0f7ed; --blue:#3324e8; --canvas:#fff; background:#fff; color:var(--ink); }
-.attendance-page .shell { display:block; }
-.attendance-page .sidebar { position:relative; z-index:30; top:auto; height:68px; min-height:68px; padding:0 20px; flex-direction:row; flex-wrap:nowrap; align-items:center; gap:18px; background:#fff; color:var(--ink); border-bottom:1px solid var(--line); }
-.attendance-page .brand { padding:0; gap:10px; flex-shrink:0; }
-.attendance-page .brand-mark { width:34px; height:34px; border:2px solid #3324e8; border-radius:50%; background:#fff; color:#3324e8; font-size:22px; }
-.attendance-page .brand-text { font-size:18px; color:var(--ink); }
-.attendance-page .sidebar nav { align-self:stretch; flex-direction:row; align-items:center; gap:4px; flex:1; min-width:0; flex-wrap:nowrap; overflow:visible; }
-.attendance-page .nav-button { position:relative; flex-shrink:0; width:auto; min-height:52px; padding:12px 10px; border-radius:0; border-bottom:3px solid transparent; color:var(--ink); font-size:15px; white-space:nowrap; }
-.attendance-page .sidebar nav > .nav-button .nav-icon { display:none; }
-.attendance-page .nav-button.active { color:#3324e8; background:#fff; border-bottom-color:#3324e8; font-weight:750; }
-.attendance-page .nav-button.active:before { display:none; }
-.attendance-page .nav-button:hover { color:#3324e8; background:#f7f6ff; }
-.attendance-page .nav-icon { width:18px; font-size:17px; }
-.attendance-page .nav-counter { background:#eeebff; color:#3324e8; padding:1px 7px; font-size:12px; }
-.attendance-page .sidebar .header-actions { flex:0 0 auto; gap:9px; min-width:0; }
-.attendance-page .sidebar .header-actions .admin-idle-countdown { display:inline-flex; flex-shrink:0; gap:4px; padding:5px 7px; font-size:11px; }
-.attendance-page .sidebar .header-actions .admin-idle-countdown time { font-size:12px; }
-.attendance-page .sidebar .header-actions .return-shop-button { min-height:35px; padding:7px 9px; font-size:12px; }
-.attendance-page .sidebar .header-actions .connection { gap:0; font-size:0; }
-.attendance-page .sidebar .header-actions .connection:before { width:8px; height:8px; }
-.attendance-page .sidebar .header-actions .live-clock { color:var(--ink); font-size:15px; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.attendance-page .sidebar .header-actions .icon-button { width:32px; height:35px; border-color:#dfe1eb; font-size:19px; }
+.top-navigation .shell { display:block; }
+.top-navigation .sidebar { position:relative; z-index:30; top:auto; height:68px; min-height:68px; padding:0 20px; flex-direction:row; flex-wrap:nowrap; align-items:center; gap:18px; background:#fff; color:var(--ink); border-bottom:1px solid var(--line); }
+.top-navigation .brand { padding:0; gap:10px; flex-shrink:0; }
+.top-navigation .brand-mark { width:34px; height:34px; border:2px solid #3324e8; border-radius:50%; background:#fff; color:#3324e8; font-size:22px; }
+.top-navigation .brand-text { font-size:18px; color:var(--ink); }
+.top-navigation .sidebar nav { align-self:stretch; flex-direction:row; align-items:center; gap:4px; flex:1; min-width:0; flex-wrap:nowrap; overflow:visible; }
+.top-navigation .nav-button { position:relative; flex-shrink:0; width:auto; min-height:52px; padding:12px 10px; border-radius:0; border-bottom:3px solid transparent; color:var(--ink); font-size:15px; white-space:nowrap; }
+.top-navigation .sidebar nav > .nav-button .nav-icon { display:none; }
+.top-navigation .nav-button.active { color:#3324e8; background:#fff; border-bottom-color:#3324e8; font-weight:750; }
+.top-navigation .nav-button.active:before { display:none; }
+.top-navigation .nav-button:hover { color:#3324e8; background:#f7f6ff; }
+.top-navigation .nav-icon { width:18px; font-size:17px; }
+.top-navigation .nav-counter { background:#eeebff; color:#3324e8; padding:1px 7px; font-size:12px; }
+.top-navigation .sidebar .header-actions { flex:0 0 auto; gap:9px; min-width:0; }
+.top-navigation .sidebar .header-actions .admin-idle-countdown { display:inline-flex; flex-shrink:0; gap:4px; padding:5px 7px; font-size:11px; }
+.top-navigation .sidebar .header-actions .admin-idle-countdown time { font-size:12px; }
+.top-navigation .sidebar .header-actions .return-shop-button { min-height:35px; padding:7px 9px; font-size:12px; }
+.top-navigation .sidebar .header-actions .connection { gap:0; font-size:0; }
+.top-navigation .sidebar .header-actions .connection:before { width:8px; height:8px; }
+.top-navigation .sidebar .header-actions .live-clock { color:var(--ink); font-size:15px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.top-navigation .sidebar .header-actions .icon-button { width:32px; height:35px; border-color:#dfe1eb; font-size:19px; }
 .attendance-nav-more,.attendance-account { position:relative; flex:0 0 auto; }
 .attendance-nav-more > summary,.attendance-account > summary { display:grid; place-items:center; padding:0; list-style:none; cursor:pointer; }
 .attendance-nav-more > summary::-webkit-details-marker,.attendance-account > summary::-webkit-details-marker { display:none; }
@@ -351,14 +351,14 @@ body.employee-kiosk {
 .attendance-account .account-role { display:block; margin:0; color:var(--muted); font-size:12px; }
 .attendance-account > div button { min-height:36px; border-radius:6px; text-align:left; }
 .attendance-account > div button:hover { color:#3324e8; background:#f4f2ff; }
-.attendance-page .sidebar-footer { margin:0; padding:0 0 0 16px; border:0; border-left:1px solid var(--line); flex-shrink:0; max-width:200px; font-size:12px; }
-.attendance-page .account-name { color:var(--ink); font-size:12px; margin-bottom:2px; }
-.attendance-page .account-role { display:none; }
-.attendance-page .sidebar-footer button { color:#4c4a72; min-height:28px; }
+.top-navigation .sidebar-footer { margin:0; padding:0 0 0 16px; border:0; border-left:1px solid var(--line); flex-shrink:0; max-width:200px; font-size:12px; }
+.top-navigation .account-name { color:var(--ink); font-size:12px; margin-bottom:2px; }
+.top-navigation .account-role { display:none; }
+.top-navigation .sidebar-footer button { color:#4c4a72; min-height:28px; }
 .attendance-page .topbar { min-height:48px; height:auto; padding:8px 24px; background:#fff; }
 .attendance-page .topbar .header-actions { gap:14px; flex-wrap:wrap; }
 .attendance-page .topbar .live-clock { font-size:15px; }
-.attendance-page .mobile-menu-toggle { display:none; }
+.top-navigation .mobile-menu-toggle { display:none; }
 .attendance-page main { max-width:none; padding:0; }
 .attendance-page .page-heading { align-items:center; gap:14px; margin:0; padding:22px 24px 18px; border-bottom:1px solid var(--line); }
 .attendance-page h1 { color:var(--ink); font-size:26px; letter-spacing:-.6px; margin-bottom:5px; }
@@ -543,24 +543,24 @@ body.employee-kiosk {
   .attendance-detail .attendance-timeline { max-width:600px; }
 }
 @media (max-width:1200px) {
-  .attendance-page .sidebar { height:auto; flex-wrap:wrap; gap:5px 16px; padding:8px 18px; }
-  .attendance-page .sidebar nav { align-self:center; }
-  .attendance-page .sidebar .header-actions { order:3; justify-content:flex-end; flex:1 0 100%; flex-wrap:wrap; padding-bottom:2px; }
+  .top-navigation .sidebar { height:auto; flex-wrap:wrap; gap:5px 16px; padding:8px 18px; }
+  .top-navigation .sidebar nav { align-self:center; }
+  .top-navigation .sidebar .header-actions { order:3; justify-content:flex-end; flex:1 0 100%; flex-wrap:wrap; padding-bottom:2px; }
   .attendance-account { margin-left:auto; }
 }
 @media (max-width:900px) {
-  .attendance-page .sidebar nav { order:3; flex:1 0 100%; flex-wrap:wrap; }
-  .attendance-page .sidebar .header-actions { order:4; }
+  .top-navigation .sidebar nav { order:3; flex:1 0 100%; flex-wrap:wrap; }
+  .top-navigation .sidebar .header-actions { order:4; }
   .attendance-nav-more > div { left:auto; right:0; }
 }
 @media (max-width:720px) {
-  .attendance-page .sidebar { position:relative; transform:none; width:auto; padding:10px 14px 4px; border-radius:0; box-shadow:none; }
-  .attendance-page .brand-text { font-size:16px; }
-  .attendance-page .brand-mark { width:30px; height:30px; }
-  .attendance-page .sidebar-footer { max-width:145px; padding-left:10px; }
-  .attendance-page .sidebar-footer .account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .attendance-page .nav-button { flex-shrink:0; min-height:42px; padding:9px 8px; font-size:14px; }
-  .attendance-page .sidebar .header-actions { justify-content:flex-start; gap:8px; }
+  .top-navigation .sidebar { position:relative; transform:none; width:auto; padding:10px 14px 4px; border-radius:0; box-shadow:none; }
+  .top-navigation .brand-text { font-size:16px; }
+  .top-navigation .brand-mark { width:30px; height:30px; }
+  .top-navigation .sidebar-footer { max-width:145px; padding-left:10px; }
+  .top-navigation .sidebar-footer .account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .top-navigation .nav-button { flex-shrink:0; min-height:42px; padding:9px 8px; font-size:14px; }
+  .top-navigation .sidebar .header-actions { justify-content:flex-start; gap:8px; }
   .attendance-account > summary { width:36px; height:36px; }
   .attendance-page .topbar { padding:8px 14px; }
   .attendance-page .topbar .header-actions { width:100%; justify-content:flex-end; gap:8px; }
@@ -609,7 +609,7 @@ body.employee-kiosk {
   .attendance-page .footer-note { padding-inline:16px; }
 }
 
-.attendance-page .attendance-account .avatar { background:linear-gradient(135deg,#8b82ff,#5244e9); color:#fff; border-radius:50%; }
+.top-navigation .attendance-account .avatar { background:linear-gradient(135deg,#8b82ff,#5244e9); color:#fff; border-radius:50%; }
 .attendance-break-summary { white-space:nowrap; }
 .attendance-page .attendance-add-movement { width:100%; justify-content:center; min-height:44px; border:1px solid #3b2cf4; color:#3324e8; font-size:15px; font-weight:650; }
 .attendance-day-note .note-chip { min-height:72px; display:block; text-align:left; }
@@ -622,3 +622,28 @@ body,body * { font-weight:700 !important; }
 .attendance-table tbody tr.attendance-weekend > td { background:#f0f3fc; }
 .attendance-table tbody tr.attendance-weekend:hover > td { background:#e8edfc; }
 .attendance-table tbody tr.attendance-weekend.attendance-selected-day > td { background:#e8e4ff; }
+
+/* One shared top navigation for every administrative page. */
+.top-navigation .sidebar { --ink:#131443; --muted:#515773; --line:#e4e7f0; position:relative; width:100%; height:auto; min-height:76px; transform:none; padding:12px 20px; gap:14px; align-items:center; }
+.top-navigation .sidebar nav { display:flex; flex:1 1 auto; flex-wrap:wrap; align-self:center; align-items:center; gap:8px; overflow:visible; }
+.top-navigation .sidebar nav > .nav-button { min-height:44px; padding:9px 13px; border:1px solid #e0e3ef; border-radius:12px; background:#f6f7fc; color:#232444; font-size:17px; line-height:1.35; }
+.top-navigation .sidebar nav > .nav-button:hover { background:#efedff; border-color:#c7bfff; color:#3324e8; }
+.top-navigation .sidebar nav > .nav-button.active { background:#ece9ff; border:1px solid #c4baff; color:#3324e8; box-shadow:0 2px 6px #3324e811; }
+.top-navigation .sidebar nav > .nav-button:focus-visible { outline:2px solid #5243ed; outline-offset:3px; }
+@media(max-width:1599px) {
+ .top-navigation .sidebar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:12px 18px; padding:12px 20px; }
+ .top-navigation .sidebar .brand { grid-column:1; grid-row:1; }
+ .top-navigation .sidebar .header-actions { grid-column:2; grid-row:1; justify-self:end; justify-content:flex-end; flex-wrap:wrap; }
+ .top-navigation .sidebar .attendance-account { grid-column:3; grid-row:1; }
+ .top-navigation .sidebar nav { grid-column:1 / -1; grid-row:2; width:100%; flex-basis:auto; justify-content:flex-start; }
+}
+@media(max-width:720px) {
+ .top-navigation .sidebar { grid-template-columns:minmax(0,1fr) auto; gap:10px; padding:12px 14px; }
+ .top-navigation .sidebar .brand { min-width:0; }
+ .top-navigation .sidebar .header-actions { grid-column:1 / -1; grid-row:2; justify-self:start; max-width:100%; }
+ .top-navigation .sidebar .attendance-account { grid-column:2; grid-row:1; }
+ .top-navigation .sidebar nav { grid-column:1 / -1; grid-row:3; min-width:0; flex-wrap:nowrap; overflow-x:auto; padding:3px 2px 6px; }
+ .top-navigation .sidebar nav > .nav-button { flex-shrink:0; font-size:16px; min-height:44px; padding:9px 12px; }
+}
+
+.top-navigation .sidebar .brand-text { display:inline; }

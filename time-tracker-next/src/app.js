@@ -496,7 +496,7 @@ function handleBrowserGate(error) {
 }
 function renderBrowserGate() {
   const gate = state.browserGate; if (!gate) return;
-  document.body.classList.remove('employee-kiosk', 'attendance-page');
+  document.body.classList.remove('employee-kiosk', 'attendance-page', 'top-navigation');
   clearPasswords(app);
   const revoked = gate.status === 'revoked'; const unavailable = gate.status === 'unavailable';
   const notification = gate.notification?.status;
@@ -535,7 +535,7 @@ async function checkBrowserApproval() {
 }
 function renderLogin() {
   state.context = null;
-  document.body.classList.remove('employee-kiosk', 'attendance-page');
+  document.body.classList.remove('employee-kiosk', 'attendance-page', 'top-navigation');
   clearPasswords(app);
   state.authMode = pageMode.admin ? 'admin' : 'device';
   const device = !pageMode.admin;
@@ -577,16 +577,13 @@ async function enterApp({freshAdmin = false} = {}) {
 }
 function attendanceShell(context) {
   const views = VIEWS.filter(function(view) { return view[3].includes(context.role); });
-  const primary = ['overview','stats','requests','employees'];
   function nav(view) {
-    return '<button type="button" class="nav-button' + (view[0] === state.view ? ' active' : '') + '" data-action="navigate" data-view="' + view[0] + '"' + (view[0] === state.view ? ' aria-current="page"' : '') + '><span class="nav-label">' + esc(view[0] === 'overview' ? 'Σήμερα' : view[1]) + '</span>' + (view[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
+    return '<button type="button" class="nav-button' + (view[0] === state.view ? ' active' : '') + '" data-action="navigate" data-view="' + view[0] + '"' + (view[0] === state.view ? ' aria-current="page"' : '') + '><span class="nav-label">' + esc(view[1]) + '</span>' + (view[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
   }
-  const more = views.filter(function(view) { return !primary.includes(view[0]) && view[0] !== 'settings'; });
   const clock = '<svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="16" cy="16" r="13"/><path d="M16 8v8h8"/></svg>';
-  return '<div class="shell"><header class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">' + clock + '</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + primary.map(function(key) { return views.find(function(view) { return view[0] === key; }); }).filter(Boolean).map(nav).join('') +
-    (more.length ? '<details class="attendance-nav-more"><summary aria-label="Περισσότερες σελίδες" title="Περισσότερες σελίδες">⋯</summary><div class="attendance-nav-menu">' + more.map(nav).join('') + '</div></details>' : '') + '</nav>' +
+  return '<div class="shell"><header class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">' + clock + '</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + views.map(nav).join('') + '</nav>' +
     '<div class="header-actions">' + adminIdleBadge() + (pageMode.admin ? button('Κατάστημα','return-shop','','small return-shop-button') : '') + '<span id="connection" class="connection" title="Συνδεδεμένο">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button>' +
-    (isAdmin() ? '<button class="icon-button attendance-settings" type="button" data-action="navigate" data-view="settings" aria-label="Ρυθμίσεις" title="Ρυθμίσεις">⚙</button>' : '') + '</div>' +
+    '</div>' +
     '<details class="attendance-account"><summary aria-label="Λογαριασμός διαχειριστή"><span class="avatar">' + esc(initials(context.display_name || context.username || context.email)) + '</span><span aria-hidden="true">⌄</span></summary><div class="attendance-account-menu"><strong>' + esc(context.display_name || context.username || context.email) + '</strong><small>' + esc(ROLES[context.role] || context.role) + '</small><button type="button" data-action="logout">Αποσύνδεση</button></div></details></header>' +
     '<div class="main-wrap"><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
 }
@@ -594,6 +591,7 @@ function attendanceShell(context) {
 function renderShell() {
   const ctx = state.context;
   document.body.classList.toggle('employee-kiosk', isOperator());
+  document.body.classList.toggle('top-navigation', !isOperator());
   document.body.classList.toggle('attendance-page', state.view === 'stats' && !isOperator());
   if (isOperator()) {
     app.innerHTML = '<div class="kiosk-shell"><header class="kiosk-header"><h1>⏱ ' + esc(APP_NAME) + '</h1><nav class="kiosk-nav" aria-label="Κύρια πλοήγηση">' +
@@ -601,17 +599,10 @@ function renderShell() {
       '<div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" class="kiosk-main" tabindex="-1"></main></div>';
     renderUncertain(); return;
   }
-  const navigation = VIEWS.filter(function(v) { return v[3].includes(ctx.role); }).map(function(v) {
-    return '<button type="button" class="nav-button ' + (v[0] === state.view ? 'active' : '') + '" data-action="navigate" data-view="' + v[0] + '" title="' + esc(v[1]) + '"><span class="nav-icon" aria-hidden="true">' + v[2] + '</span><span class="nav-label">' + v[1] + '</span>' +
-      (v[0] === 'requests' ? '<span class="nav-counter" id="request-counter">—</span>' : '') + '</button>';
-  }).join('');
-  if (state.view === 'stats') { app.innerHTML = attendanceShell(ctx); renderUncertain(); tick(); return; }
-  app.innerHTML = '<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">⏱</span><span class="brand-text">' + esc(APP_NAME) + '</span></div><nav aria-label="Κύρια πλοήγηση">' + navigation + '</nav>' +
-    '<div class="sidebar-footer"><div class="account-name">' + esc(ctx.display_name || ctx.username || ctx.email) + '</div><div class="account-role">' + esc(ROLES[ctx.role] || ctx.role) + (ctx.is_owner ? ' · Ιδιοκτήτης' : '') + '</div><button type="button" data-action="logout">Αποσύνδεση ↗</button></div></aside>' +
-    '<div class="main-wrap"><header class="topbar"><button class="icon-button mobile-menu-toggle" type="button" data-action="toggle-menu" aria-label="Μενού" aria-expanded="false">☰</button><span class="header-title-mobile">' + esc(APP_NAME) + '</span><div class="breadcrumb">Χώρος εργασίας <span aria-hidden="true">/</span> <strong id="current-view-name">' + esc(VIEWS.find(function(v) { return v[0] === state.view; })?.[1] || '') + '</strong></div>' +
-    '<div class="header-actions">' + adminIdleBadge() + (pageMode.admin ? button('🏠 Κατάστημα', 'return-shop', '', 'small return-shop-button') : '') + '<span id="connection" class="connection">Συνδεδεμένο</span><time class="live-clock mono"></time><button class="icon-button" type="button" data-action="refresh" aria-label="Ανανέωση" title="Ανανέωση">↻</button></div></header><div id="browser-link-notice" class="browser-link-notice">' + browserLinkNotice() + '</div><div id="uncertain" class="uncertain-banner hidden" role="alert"></div><main id="main" tabindex="-1"></main></div></div>';
+  app.innerHTML = attendanceShell(ctx);
   renderUncertain(); tick();
 }
+
 async function loadOverview() {
   return api.read('overview', {});
 }

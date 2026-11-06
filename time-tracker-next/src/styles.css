@@ -730,3 +730,26 @@ body,body * { font-weight:700 !important; }
 .request-selection { color:var(--muted); font-size:12px; white-space:nowrap; }
 .requests-card .request-checkbox-col { width:64px; text-align:center; }
 @media(max-width:720px) { .request-bulk-actions { padding:14px; gap:12px; } .request-bulk-actions .button { width:100%; } }
+
+/* Larger text is limited to the Corrections content, outside shared navigation. */
+.requests-content { font-size:28px; }
+.requests-content h1 { font-size:56px; }
+.requests-content .eyebrow { font-size:22px; }
+.requests-content .page-heading p { font-size:28px; }
+.requests-content .field label { font-size:24px; }
+.requests-content .field select { font-size:28px; }
+.requests-content .table-wrap table { font-size:28px; }
+.requests-content .table-wrap th { font-size:20px; }
+.requests-content .button { font-size:26px; }
+.requests-content .button.small { font-size:24px; }
+.requests-content .badge { font-size:22px; }
+.requests-content small { font-size:22px; }
+.requests-content .check-label { font-size:26px; }
+.requests-content .request-selection { font-size:24px; }
+.requests-content .banner { font-size:26px; }
+.requests-content .banner-icon { font-size:36px; }
+.requests-content .empty h3 { font-size:32px; }
+@media(max-width:720px) {
+ .requests-content h1 { font-size:50px; }
+ .requests-content .page-heading p,.requests-content .banner { font-size:24px; }
+}

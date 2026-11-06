@@ -25,6 +25,41 @@ function sameInstant(left, right) {
   return a !== null && b !== null && a === b;
 }
 
+function compactDateTime(value) {
+  return validInstant(value) ? `${formatDate(value)}, ${formatTime(value).replace(':', '.')}` : '';
+}
+
+/** The visible instruction stays short; exact evidence remains in the details. */
+function summarizeIssue(issue, attempts) {
+  const required = (Array.isArray(issue.expected_actions) ? issue.expected_actions : []).filter(type => Object.hasOwn(ACTION_LABELS, type));
+  const at = compactDateTime(issue.event_at);
+  const eventWhen = at ? ` στις ${at}` : '';
+  if (!required.length) return `Η καταχώρηση${eventWhen} χρειάζεται έλεγχο από τον διαχειριστή. Πάτησε «Ακύρωση» και ενημέρωσέ τον.`;
+
+  const proposedEntry = attempts.some(event => event.type === 'clock_in' && sameInstant(event.event_at, issue.open_shift_at));
+  const proposedBreak = attempts.some(event => event.type === 'break_start' && sameInstant(event.event_at, issue.open_break_at));
+  const isAttempt = attempts.some(event => event.type === issue.type && sameInstant(event.event_at, issue.event_at));
+  const shiftStart = compactDateTime(issue.open_shift_at);
+  const breakStart = compactDateTime(issue.open_break_at);
+
+  if (issue.state_before === 'IN' && issue.type === 'clock_in') {
+    if (proposedEntry && !isAttempt) return `Η αίτηση εισόδου συγκρούεται με υπάρχουσα είσοδο${eventWhen}. Αν διορθώνεις την ώρα της, ζήτησε από τον διαχειριστή αλλαγή της υπάρχουσας καταγραφής.`;
+    return `${shiftStart && !proposedEntry ? `Έχεις ήδη κάνει είσοδο στις ${formatTime(issue.open_shift_at).replace(':', '.')} της ${formatDate(issue.open_shift_at)}` : 'Υπάρχει ήδη ανοιχτή βάρδια'}. Για νέα είσοδο, συμπλήρωσε πρώτα την πραγματική έξοδο αυτής της βάρδιας.`;
+  }
+  if (issue.state_before === 'ON_BREAK' && issue.type === 'clock_in') {
+    const shift = shiftStart && !proposedEntry ? `της βάρδιας που ξεκίνησε στις ${shiftStart}` : 'της προηγούμενης βάρδιας';
+    return `Πριν από τη νέα είσοδο${eventWhen} λείπουν η επιστροφή από το διάλειμμα και η έξοδος ${shift}. Συμπλήρωσέ τες με αυτή τη σειρά, με τις πραγματικές ώρες.`;
+  }
+  if (issue.state_before === 'ON_BREAK') {
+    return `${breakStart && !proposedBreak ? `Έχεις ανοιχτό διάλειμμα από ${breakStart}` : `Πριν από την επόμενη κίνηση${eventWhen} λείπει η επιστροφή από το διάλειμμα`}. Συμπλήρωσε πρώτα την πραγματική ώρα επιστροφής από το διάλειμμα.`;
+  }
+  const action = { clock_in: 'είσοδο', break_start: 'έναρξη διαλείμματος', break_end: 'επιστροφή από διάλειμμα', clock_out: 'έξοδο' }[issue.type] || 'επόμενη κίνηση';
+  const nouns = { clock_in: 'η είσοδος', break_start: 'η έναρξη διαλείμματος', break_end: 'η επιστροφή από το διάλειμμα', clock_out: 'η έξοδος' };
+  const possessives = { clock_in: 'εισόδου', break_start: 'έναρξης διαλείμματος', break_end: 'επιστροφής από το διάλειμμα', clock_out: 'εξόδου' };
+  const missing = required.map(type => nouns[type]).join(' και ');
+  return `Πριν από την ${action}${eventWhen} ${required.length > 1 ? 'λείπουν' : 'λείπει'} ${missing}. ${required.length === 1 ? `Συμπλήρωσε πρώτα την πραγματική ώρα ${possessives[required[0]]}` : `Συμπλήρωσε τις πραγματικές ώρες με αυτή τη σειρά: ${required.map(label).join(' → ')}`}.`;
+}
+
 function explainIssue(issue, attempts) {
   const state = issue.state_before;
   const type = issue.type;
@@ -140,6 +175,7 @@ export function buildFlowDiagnostics(details, { attemptedEvent = null, attempted
   }
   return {
     title: 'Γιατί δεν έγινε δεκτή η καταχώρηση',
+    summary: summarizeIssue(first, attempts),
     intro: 'Η καταχώρηση δεν αποθηκεύτηκε. Οι παρακάτω ασυμφωνίες χρειάζονται έλεγχο με τη σειρά που εμφανίζονται.',
     attemptSummary: attempt && diagnosticDateTime(attempt.event_at) ? `Η προσπάθειά σου: ${label(attempt.type)} στις ${diagnosticDateTime(attempt.event_at)}. Αυτή η κίνηση δεν αποθηκεύτηκε.` : '',
     issueCount: usable.length, remainingCount: usable.length - items.length, items,

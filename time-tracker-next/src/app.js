@@ -388,8 +388,19 @@ function flowDiagnosticText(model) {
 }
 function modalError(error, kind = '') {
   const node = document.getElementById('modal-error');
-  if (!node) { toast(issueMessages(error), 'error'); return; }
-  node.textContent = error.flowDiagnostics ? flowDiagnosticText(error.flowDiagnostics) : issueMessages(error);
+  if (!node) { toast(error.flowDiagnostics?.summary || issueMessages(error), 'error'); return; }
+  node.classList.toggle('flow-diagnostic-error', Boolean(error.flowDiagnostics));
+  if (error.flowDiagnostics) {
+    node.textContent = '';
+    const instruction = document.createElement('p');
+    instruction.className = 'flow-diagnostic-summary';
+    instruction.textContent = error.flowDiagnostics.summary || error.flowDiagnostics.intro;
+    const details = document.createElement('details'); details.className = 'flow-diagnostic-details';
+    const toggle = document.createElement('summary'); toggle.textContent = 'Αναλυτική εξήγηση';
+    const explanation = document.createElement('div'); explanation.className = 'flow-diagnostic-text';
+    explanation.textContent = flowDiagnosticText(error.flowDiagnostics);
+    details.append(toggle, explanation); node.append(instruction, details);
+  } else node.textContent = issueMessages(error);
   if (isAdmin() && error.details?.code === 'STALE_REVISION' && state.adminDay) {
     const p = document.createElement('p'); p.textContent = 'Οι ώρες άλλαξαν σε άλλη συσκευή. Φόρτωσε τη νεότερη εικόνα πριν αποθηκεύσεις ξανά. Οι μη αποθηκευμένες αλλαγές αυτής της φόρμας θα χαθούν.';
     const b = document.createElement('button'); b.type = 'button'; b.className = 'button small'; b.dataset.action = 'admin-day-reload'; b.textContent = 'Φόρτωση νεότερων ωρών'; node.append(p, b);

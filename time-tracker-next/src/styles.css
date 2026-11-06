@@ -755,3 +755,11 @@ body,body * { font-weight:700 !important; }
 .history-selection-col .check-label { justify-content:center; white-space:nowrap; }
 .event-check,#select-all-events { width:24px; height:24px; margin:0; accent-color:var(--teal); cursor:pointer; }
 .event-check:focus-visible,#select-all-events:focus-visible { outline:2px solid #5243ed; outline-offset:3px; }
+
+/* Show the next employee instruction; keep the full explanation optional. */
+.modal-error.flow-diagnostic-error { white-space:normal; }
+.flow-diagnostic-summary { margin:0; font-weight:700; line-height:1.55; }
+.flow-diagnostic-details { margin-top:8px; }
+.flow-diagnostic-details > summary { cursor:pointer; padding:6px 0; min-height:32px; line-height:1.4; }
+.flow-diagnostic-details > summary:focus-visible { outline:2px solid currentColor; outline-offset:3px; border-radius:3px; }
+.flow-diagnostic-text { margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere; }

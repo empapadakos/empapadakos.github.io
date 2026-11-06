@@ -763,3 +763,13 @@ body,body * { font-weight:700 !important; }
 .flow-diagnostic-details > summary { cursor:pointer; padding:6px 0; min-height:32px; line-height:1.4; }
 .flow-diagnostic-details > summary:focus-visible { outline:2px solid currentColor; outline-offset:3px; border-radius:3px; }
 .flow-diagnostic-text { margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Compact spacing applies only to the Personnel list card. */
+.employees-card { padding:16px 18px 0; }
+.employees-card > .card-heading { margin-bottom:12px; gap:12px; }
+.employees-card > .table-wrap { margin-inline:-18px; }
+.employees-card .table-wrap th { padding:9px 14px; }
+.employees-card .table-wrap td { padding:8px 14px; vertical-align:middle; }
+.employees-card .employee-table-name { gap:8px; }
+.employees-card .actions { gap:6px; }
+.employees-card .break-line { margin-top:1px; }

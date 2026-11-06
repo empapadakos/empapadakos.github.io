@@ -1310,7 +1310,7 @@ function renderStats() {
 function renderEmployees() {
   const rows = visibleEmployees(state.showArchived);
   return heading('Προσωπικό', 'Η ομάδα, τα τμήματα και οι ατομικές ρυθμίσεις ωραρίου.', isAdmin() ? button('Τμήματα', 'manage-departments') + button('Προσθήκη εργαζομένου', 'edit-employee', '', 'primary') : '') +
-    '<section class="card"><div class="card-heading"><h2>' + rows.length + ' εργαζόμενοι</h2><label class="check-label"><input id="show-archived" type="checkbox"' + (state.showArchived ? ' checked' : '') + '>Εμφάνιση αρχείου</label></div>' +
+    '<section class="card employees-card"><div class="card-heading"><h2>' + rows.length + ' εργαζόμενοι</h2><label class="check-label"><input id="show-archived" type="checkbox"' + (state.showArchived ? ' checked' : '') + '>Εμφάνιση αρχείου</label></div>' +
     (rows.length ? '<div class="table-wrap"><table><thead><tr><th>Εργαζόμενος</th><th>Τμήμα</th><th>Προσέλευση</th><th>Αποχώρηση</th><th>Κατάσταση</th><th></th></tr></thead><tbody>' +
       rows.map(function(e) {
         return '<tr><td><div class="employee-table-name">' + avatar(e) + '<strong>' + esc(e.name) + '</strong></div></td><td>' + esc(e.department || '—') + '</td><td class="mono">' + esc(e.shift1_start ? clockText(e.shift1_start) : '—') + (e.shift2_start ? ' / ' + esc(clockText(e.shift2_start)) : '') + '<small class="break-line">Ανοχή ' + esc(e.lateness_tolerance_minutes || 0) + ' λεπτά</small></td><td class="mono">' + esc(e.shift_end ? clockText(e.shift_end) : '—') + '</td><td>' + (e.archived ? '<span class="badge">Αρχείο</span>' : '<span class="badge green">Ενεργός</span>') + '</td><td><div class="actions">' +

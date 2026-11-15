@@ -18,8 +18,11 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
+    env:
+      PAGES_ARTIFACT_NAME: pages-${{ github.run_id }}-${{ github.run_attempt }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -40,9 +43,32 @@ jobs:
       - name: Upload the complete static site
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
+          name: ${{ env.PAGES_ARTIFACT_NAME }}
           path: .
+      - name: Wait for the Pages artifact to be indexed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.request
+          url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/artifacts?per_page=100'
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Cache-Control': 'no-cache'}
+          for attempt in range(10):
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15) as response:
+                  artifacts = json.load(response).get('artifacts', [])
+              matches = [a for a in artifacts if a['name'] == os.environ['PAGES_ARTIFACT_NAME'] and not a['expired']]
+              if len(matches) == 1:
+                  print('Pages artifact is indexed and ready.')
+                  break
+              if len(matches) > 1:
+                  raise SystemExit('Multiple artifacts unexpectedly share this attempt name.')
+              if attempt == 9:
+                  raise SystemExit('The uploaded Pages artifact is not yet indexed. Retry this job.')
+              time.sleep(5)
+          PY
       - name: Publish to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
         with:
-          timeout: 1800000
+          artifact_name: ${{ env.PAGES_ARTIFACT_NAME }}
+          timeout: 600000

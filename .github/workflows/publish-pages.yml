@@ -36,8 +36,6 @@ jobs:
           test -f .nojekyll
           test -f index.html
           test -d privacy
-          test -f time-tracker-next/index.html
-          test -f time-tracker-next/asset-manifest.json
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - name: Upload the complete static site
